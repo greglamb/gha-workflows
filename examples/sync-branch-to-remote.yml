@@ -22,8 +22,8 @@ on:
         default: true
 
 # Optional schedule per-repo
-schedule:
-  - cron: "0 2 * * 1"
+  schedule:
+    - cron: "0 2 * * 1"
 
 jobs:
   call-sync:
