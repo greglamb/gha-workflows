@@ -1,0 +1,82 @@
+name: Sync branch to remote
+
+on:
+  workflow_call:
+    inputs:
+      source_repo:
+        description: "Git URL of source repo (required)"
+        required: true
+        type: string
+      source_ref:
+        description: "Source branch or ref to mirror (required)"
+        required: true
+        type: string
+        default: "main"
+      target_ref:
+        description: "Target branch (created/overwritten, required)"
+        required: true
+        type: string
+        default: "upstream"
+      disable_workflows:
+        description: "If true, removes .github/workflows from the mirrored branch"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_REPO: ${{ inputs.source_repo }}
+      SOURCE_REF:  ${{ inputs.source_ref }}
+      TARGET_REF:  ${{ inputs.target_ref }}
+      SOURCE_REMOTE: upstream
+    steps:
+      - name: Checkout repo (no branch changes)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure remotes and fetch source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add "$SOURCE_REMOTE" "$SOURCE_REPO" 2>/dev/null || true
+          git remote set-url "$SOURCE_REMOTE" "$SOURCE_REPO"
+          git fetch "$SOURCE_REMOTE" "$SOURCE_REF" --tags
+
+      - name: Mirror ${{ env.SOURCE_REMOTE }}/${{ env.SOURCE_REF }} into ${{ env.TARGET_REF }} (force)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git switch -C "$TARGET_REF"
+          git reset --hard FETCH_HEAD
+
+      - name: Disable workflows (optional)
+        if: ${{ inputs.disable_workflows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -d ".github/workflows" ]; then
+            shopt -s nullglob
+            files=(.github/workflows/*.yml .github/workflows/*.yaml)
+            if [ ${#files[@]} -gt 0 ]; then
+              git rm -f "${files[@]}"
+              if ! git diff --cached --quiet; then
+                git commit -m "Removed workflows in mirror"
+              fi
+            fi
+          fi
+
+      - name: Push mirror
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin "$TARGET_REF" --force
