@@ -18,13 +18,29 @@ on:
         type: string
         default: "upstream"
       disable_workflows:
-        description: "If true, removes .github/workflows from the mirrored branch"
+        description: "How to handle upstream workflows: rename, delete, or keep"
+        required: false
+        type: string
+        default: "rename"
+      rename_dir:
+        description: "Destination directory for renamed workflows (rename mode only)"
+        required: false
+        type: string
+        default: ".github/workflows-upstream"
+      create_pr:
+        description: "Auto-create a PR from the sync branch into pr_base after sync"
         required: false
         type: boolean
-        default: true
+        default: false
+      pr_base:
+        description: "Base branch for auto-created PR (create_pr must be true)"
+        required: false
+        type: string
+        default: "main"
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   sync-upstream:
@@ -59,24 +75,88 @@ jobs:
           git switch -C "$TARGET_REF"
           git reset --hard FETCH_HEAD
 
-      - name: Disable workflows (optional)
-        if: ${{ inputs.disable_workflows }}
+      - name: Handle upstream workflows (${{ inputs.disable_workflows }})
+        if: ${{ inputs.disable_workflows != 'keep' }}
         shell: bash
+        env:
+          DISABLE_MODE: ${{ inputs.disable_workflows }}
+          RENAME_DIR: ${{ inputs.rename_dir }}
         run: |
           set -euo pipefail
-          if [ -d ".github/workflows" ]; then
-            shopt -s nullglob
-            files=(.github/workflows/*.yml .github/workflows/*.yaml)
-            if [ ${#files[@]} -gt 0 ]; then
+          if [ ! -d ".github/workflows" ]; then
+            echo "No .github/workflows directory — nothing to do."
+            exit 0
+          fi
+
+          shopt -s nullglob
+          files=(.github/workflows/*.yml .github/workflows/*.yaml)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No workflow files found — nothing to do."
+            exit 0
+          fi
+
+          case "$DISABLE_MODE" in
+            rename)
+              mkdir -p "$RENAME_DIR"
+              git mv "${files[@]}" "$RENAME_DIR/"
+              rmdir ".github/workflows" 2>/dev/null || true
+              if ! git diff --cached --quiet; then
+                git commit -m "Moved upstream workflows to $RENAME_DIR"
+              fi
+              ;;
+            delete)
               git rm -f "${files[@]}"
               if ! git diff --cached --quiet; then
-                git commit -m "Removed workflows in mirror"
+                git commit -m "Removed upstream workflows in mirror"
               fi
-            fi
-          fi
+              ;;
+            *)
+              echo "Warning: Unknown disable_workflows value '$DISABLE_MODE' — skipping."
+              ;;
+          esac
 
       - name: Push mirror
         shell: bash
         run: |
           set -euo pipefail
           git push origin "$TARGET_REF" --force
+
+      - name: Create or update PR
+        if: ${{ inputs.create_pr }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REF: ${{ inputs.target_ref }}
+          PR_BASE: ${{ inputs.pr_base }}
+          SOURCE_REPO: ${{ inputs.source_repo }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -euo pipefail
+
+          PR_TITLE="Sync upstream: ${SOURCE_REPO} (${SOURCE_REF})"
+          PR_BODY="Automated sync from \`${SOURCE_REPO}\` branch \`${SOURCE_REF}\`.
+
+          **Source commit:** \`$(git rev-parse HEAD)\`
+          **Synced at:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+
+          ---
+          _This PR was auto-created by the upstream sync workflow._"
+
+          # Check for existing open PR from this branch
+          EXISTING_PR=$(gh pr list \
+            --head "$TARGET_REF" \
+            --base "$PR_BASE" \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty' 2>/dev/null || true)
+
+          if [ -n "$EXISTING_PR" ]; then
+            echo "✓ Existing PR #$EXISTING_PR updated (force-push updated the branch)."
+          else
+            gh pr create \
+              --title "$PR_TITLE" \
+              --body "$PR_BODY" \
+              --head "$TARGET_REF" \
+              --base "$PR_BASE"
+            echo "✓ Created PR: $TARGET_REF → $PR_BASE"
+          fi
