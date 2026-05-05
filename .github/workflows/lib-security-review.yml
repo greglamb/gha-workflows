@@ -397,6 +397,7 @@ jobs:
         env:
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BRANCH: ${{ github.ref_name }}
         run: |
           python3 - <<'PYEOF' >> "$GITHUB_STEP_SUMMARY"
           import json, os, pathlib
@@ -533,7 +534,15 @@ jobs:
           # Footer
           print("---")
           print()
-          print(f"**View artifacts:** [{os.environ.get('RUN_URL', 'workflow run')}]({os.environ.get('RUN_URL', '')})  ")
+          repo = os.environ.get("REPO_URL", "")
+          branch = os.environ.get("BRANCH", "")
+          run_url = os.environ.get("RUN_URL", "")
+          # Code Scanning UI link, scoped to this branch. Available on public
+          # repos for free; private repos need GitHub Advanced Security
+          # (uploads soft-fail with continue-on-error otherwise).
+          cs_url = f"{repo}/security/code-scanning?query=is%3Aopen+branch%3A{branch}" if repo else ""
+          print(f"**Code Scanning UI:** [Security tab → Code scanning ({branch})]({cs_url})  ")
+          print(f"**Workflow artifacts:** [run #{os.environ.get('GITHUB_RUN_NUMBER', '')}]({run_url})  ")
           print("**Tip:** Open SARIF files locally with VSCode's [SARIF Viewer](https://marketplace.visualstudio.com/items?itemName=MS-SarifVSCode.sarif-viewer) extension.")
           PYEOF
 
