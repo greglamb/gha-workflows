@@ -45,7 +45,7 @@ Options:
   -d, --disable-workflows <mode>       rename|delete|keep (default: rename)
   --rename-dir <path>                  Rename destination (default: .github/workflows-upstream)
   --workflows-repo <owner/repo>        Reusable workflow source (default: greglamb/gha-workflows)
-  --caller-ref <ref>                   Workflow repo ref (default: v1)
+  --caller-ref <ref>                   Workflow repo ref (default: v2)
   --auto-pr                            Auto-create PR after sync (default: off)
   --pr-base <branch>                   PR target branch (default: main)
   --dry-run                            Preview output without writing files
@@ -56,7 +56,7 @@ Options:
   -h, --help                           Show this help
 
 Modes:
-  inline   Downloads lib-sync-remote-branch.yml.yml into the repo. Self-contained,
+  inline   Downloads lib-sync-remote-branch.yml into the repo. Self-contained,
            no external dependency at runtime. Update with --update --force.
   caller   Thin caller to remote reusable workflow at <workflows-repo>@<ref>.
            Smaller footprint, auto-picks up upstream workflow changes.

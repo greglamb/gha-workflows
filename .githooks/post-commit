@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Tag the commit when package.json's version was bumped.
+# Skips during rebase/cherry-pick/merge to avoid tag spam.
+
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+GIT_DIR="$(git rev-parse --git-dir)"
+
+if [[ -d "$GIT_DIR/rebase-merge" || -d "$GIT_DIR/rebase-apply" || -f "$GIT_DIR/CHERRY_PICK_HEAD" || -f "$GIT_DIR/MERGE_HEAD" ]]; then
+  exit 0
+fi
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "post-commit: jq not installed, skipping tag" >&2
+  exit 0
+fi
+
+PKG="$ROOT/package.json"
+[[ -f "$PKG" ]] || exit 0
+
+# Only tag if package.json was modified in this commit
+if git rev-parse HEAD~1 >/dev/null 2>&1; then
+  if ! git diff --name-only HEAD~1 HEAD | grep -qx 'package.json'; then
+    exit 0
+  fi
+fi
+
+VERSION=$(jq -r '.version // empty' "$PKG")
+[[ -n "$VERSION" ]] || exit 0
+
+TAG="v$VERSION"
+
+if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+  echo "post-commit: tag $TAG already exists, skipping" >&2
+  exit 0
+fi
+
+git tag "$TAG" HEAD
+echo "post-commit: tagged $TAG"

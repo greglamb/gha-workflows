@@ -202,7 +202,7 @@ permissions:
 
 jobs:
   security:
-    uses: ${WORKFLOW_REPO}/.github/workflows/security.yml@${WORKFLOW_REF}
+    uses: ${WORKFLOW_REPO}/.github/workflows/lib-security-review.yml@${WORKFLOW_REF}
     permissions:
       contents: read
       security-events: write

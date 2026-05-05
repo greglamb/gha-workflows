@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Auto-bump CalVer version in package.json when files under
+# .github/workflows/ are staged. Re-stages package.json so the
+# bump lands in the same commit.
+
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+BUMP="$ROOT/shared/bumpCalver.sh"
+PKG="$ROOT/package.json"
+
+if [[ ! -x "$BUMP" ]]; then
+  echo "pre-commit: $BUMP not found or not executable, skipping version bump" >&2
+  exit 0
+fi
+
+if [[ ! -f "$PKG" ]]; then
+  echo "pre-commit: package.json not found, skipping version bump" >&2
+  exit 0
+fi
+
+STAGED=$(git diff --cached --name-only)
+
+if echo "$STAGED" | grep -q '^\.github/workflows/'; then
+  "$BUMP" "$PKG" version
+  git add "$PKG"
+fi

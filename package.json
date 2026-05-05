@@ -1,0 +1,14 @@
+{
+  "name": "gha-workflows",
+  "version": "0.2605.0501",
+  "description": "Reusable GitHub Actions workflows",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "postinstall": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/greglamb/gha-workflows.git"
+  }
+}
