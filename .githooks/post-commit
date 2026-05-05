@@ -8,6 +8,10 @@
 # are correctly skipped, while amends that change the version re-tag.
 # If the tag already exists at a different commit (typical after amend),
 # the tag is force-moved to HEAD; the original commit is being abandoned.
+#
+# Tags are annotated (git tag -a) rather than lightweight, so that
+# `git push --follow-tags` bundles them into the next push automatically
+# and they carry release metadata visible in `git show <tag>`.
 
 set -euo pipefail
 
@@ -46,10 +50,10 @@ if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
   if [[ "$EXISTING_SHA" == "$HEAD_SHA" ]]; then
     exit 0
   fi
-  git tag -f "$TAG" HEAD
+  git tag -fa -m "Release $TAG" "$TAG" HEAD
   echo "post-commit: moved tag $TAG from $EXISTING_SHA to HEAD (likely amend)"
   exit 0
 fi
 
-git tag "$TAG" HEAD
+git tag -a -m "Release $TAG" "$TAG" HEAD
 echo "post-commit: tagged $TAG"
