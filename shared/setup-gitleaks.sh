@@ -196,12 +196,30 @@ gl::write_gitleaks_config() {
     return 0
   fi
   gl::info "creating .gitleaks.toml"
+  # Minimal valid config — gitleaks ships with built-in rules, so the only
+  # thing this file needs to do is exist (so gitleaks finds it and treats
+  # the repo root as the project root for allowlist paths). Allowlist
+  # entries are commented out: gitleaks 8.28+ rejects empty allowlist
+  # blocks, so we only add one when the user actually has something to
+  # allow. Uncomment and fill in as needed.
   cat > .gitleaks.toml <<'TOML'
 title = "Gitleaks config"
 
-[allowlist]
-  description = "Allowlisted patterns"
-  paths = []
+# Inherit gitleaks' built-in default rules so we don't have to redeclare them.
+[extend]
+useDefault = true
+
+# Allowlist entries — uncomment and adapt as needed. Each [[allowlists]]
+# entry must include at least one non-empty check (commits, paths,
+# regexes, or stopwords) or gitleaks will refuse to load the config.
+#
+# [[allowlists]]
+#   description = "Skip vendored test fixtures"
+#   paths = ['^tests/fixtures/']
+#
+# [[allowlists]]
+#   description = "Known false positives in this repo"
+#   regexes = ['EXAMPLE_API_KEY_NOT_REAL']
 TOML
 }
 
