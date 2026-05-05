@@ -119,10 +119,13 @@ jobs:
         run: |
           set -euo pipefail
           # Fetch install.sh from the IMMUTABLE TAG matching the binary version.
-          # install.sh internally verifies the Cosign signature on the binary.
+          # `-v` selects the version; `--verify-signatures` opts in to Cosign
+          # signature verification of the binary against OpenGrep's signed
+          # release artifacts (stronger than a SHA256 checksum — proves the
+          # binary was produced by OpenGrep's signed release workflow).
           INSTALL_SH_URL="https://raw.githubusercontent.com/opengrep/opengrep/${OPENGREP_VERSION}/install.sh"
           curl --fail --silent --show-error --location "$INSTALL_SH_URL" \
-            | bash -s -- --version "${OPENGREP_VERSION}"
+            | bash -s -- -v "${OPENGREP_VERSION}" --verify-signatures
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Confirm OpenGrep version
@@ -180,7 +183,7 @@ jobs:
           set -euo pipefail
           INSTALL_SH_URL="https://raw.githubusercontent.com/opengrep/opengrep/${OPENGREP_VERSION}/install.sh"
           curl --fail --silent --show-error --location "$INSTALL_SH_URL" \
-            | bash -s -- --version "${OPENGREP_VERSION}"
+            | bash -s -- -v "${OPENGREP_VERSION}" --verify-signatures
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run OpenGrep generic-mode rules
@@ -212,13 +215,39 @@ jobs:
           overwrite: true
 
   # ---------- SCA ----------
+  # Direct action invocation (not the upstream reusable workflow) so we own
+  # the SARIF upload + artifact archive steps and can give them the same
+  # `continue-on-error: true` graceful-degradation we use elsewhere. The
+  # upstream reusable workflow's internal SARIF upload is unguarded, which
+  # fails the entire job on private repos without GitHub Advanced Security.
   osv-scanner:
     name: OSV-Scanner (SCA)
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.3.5
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
+    runs-on: ${{ inputs.runner-os }}
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - name: Run OSV-Scanner
+        uses: google/osv-scanner-action/osv-scanner-action@v2.3.5
+        with:
+          scan-args: |-
+            --recursive
+            --format=sarif
+            --output=osv-scanner.sarif
+            ./
+        continue-on-error: true
+      - uses: github/codeql-action/upload-sarif@v4.35.3
+        if: always() && hashFiles('osv-scanner.sarif') != ''
+        continue-on-error: true  # private repos without GHAS will fail here; that's OK
+        with:
+          sarif_file: osv-scanner.sarif
+          category: osv-scanner
+      - name: Archive SARIF as workflow artifact
+        uses: actions/upload-artifact@v7.0.1
+        if: always() && hashFiles('osv-scanner.sarif') != ''
+        with:
+          name: sarif-osv-scanner
+          path: osv-scanner.sarif
+          retention-days: 30
+          overwrite: true
 
   # ---------- Filesystem / IaC / containers ----------
   trivy:
@@ -319,7 +348,7 @@ jobs:
   summary:
     name: Findings summary
     if: always()
-    needs: [opengrep, opengrep-generic, trivy, trufflehog-diff, trufflehog-history]
+    needs: [opengrep, opengrep-generic, osv-scanner, trivy, trufflehog-diff, trufflehog-history]
     runs-on: ${{ inputs.runner-os }}
     steps:
       - name: Download all SARIF artifacts
@@ -342,6 +371,7 @@ jobs:
           SCANNERS = [
               ("sarif-opengrep",            "OpenGrep (SAST)"),
               ("sarif-opengrep-generic",    "OpenGrep (generic mode)"),
+              ("sarif-osv-scanner",         "OSV-Scanner (SCA)"),
               ("sarif-trivy",               "Trivy (filesystem + IaC)"),
               ("sarif-trufflehog-diff",     "TruffleHog (PR diff)"),
               ("sarif-trufflehog-history",  "TruffleHog (full history)"),
