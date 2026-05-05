@@ -2,7 +2,7 @@
 
 Reusable GitHub Actions workflows and bootstrap tooling for setting them up across repos.
 
-Pin to a tag for stability — for example, `@v0.2605.0501`. Use `@main` only during initial rollout. See [Versioning](#versioning) for how releases are produced.
+Pin to a tag for stability — see [Releases](https://github.com/greglamb/gha-workflows/releases) for the current latest. Examples below use `@<latest>` as a placeholder; substitute the actual tag. Use `@main` only during initial rollout. See [Versioning](#versioning) for how releases are produced.
 
 ## Workflows
 
@@ -63,7 +63,7 @@ permissions:
 
 jobs:
   security:
-    uses: greglamb/gha-workflows/.github/workflows/lib-security-review.yml@v0.2605.0501
+    uses: greglamb/gha-workflows/.github/workflows/lib-security-review.yml@<latest>
     permissions:
       contents: read
       security-events: write
@@ -126,7 +126,7 @@ on:
 
 jobs:
   sync:
-    uses: greglamb/gha-workflows/.github/workflows/lib-sync-remote-branch.yml@v0.2605.0501
+    uses: greglamb/gha-workflows/.github/workflows/lib-sync-remote-branch.yml@<latest>
     with:
       source_repo: https://github.com/org/repo.git
       source_ref: main
@@ -196,9 +196,9 @@ Useful flags: `--mode inline|caller`, `--branch`, `--sync-branch`, `--cron`, `--
 This repo uses CalVer (`0.YYMM.DDBB`) tracked in `package.json`. Releases are tagged automatically by git hooks:
 
 - **`.githooks/pre-commit`** — when staged changes touch `.github/workflows/`, bumps the version in `package.json` via [`shared/bumpCalver.sh`](shared/bumpCalver.sh) and re-stages it.
-- **`.githooks/post-commit`** — if `package.json`'s `version` field differs between HEAD and HEAD~1, creates a `v<version>` tag pointing at HEAD. After `git commit --amend`, the tag is force-moved to the new HEAD. Skips during rebase, cherry-pick, and merge.
+- **`.githooks/post-commit`** — if `package.json`'s `version` field differs between HEAD and HEAD~1, creates an annotated `v<version>` tag pointing at HEAD. After `git commit --amend`, the tag is force-moved to the new HEAD. Skips during rebase, cherry-pick, and merge.
 
-Tags need an explicit push: `git push --tags` (or `git push --follow-tags`).
+Tags publish automatically with `git push --follow-tags` since they're annotated.
 
 ### Setup for contributors
 
