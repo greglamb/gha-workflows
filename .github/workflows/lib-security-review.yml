@@ -111,7 +111,7 @@ jobs:
     name: OpenGrep (SAST)
     runs-on: ${{ inputs.runner-os }}
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v6.0.2
 
       - name: Install OpenGrep (tag-pinned + Cosign-verified)
         env:
@@ -150,14 +150,14 @@ jobs:
           opengrep scan $configs --sarif --output=opengrep.sarif
         continue-on-error: true
 
-      - uses: github/codeql-action/upload-sarif@v3.27.0
+      - uses: github/codeql-action/upload-sarif@v4.35.3
         if: always() && hashFiles('opengrep.sarif') != ''
         continue-on-error: true  # private repos without GHAS will fail here; that's OK
         with:
           sarif_file: opengrep.sarif
           category: opengrep
       - name: Archive SARIF as workflow artifact
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@v7.0.1
         if: always() && hashFiles('opengrep.sarif') != ''
         with:
           name: sarif-opengrep
@@ -171,7 +171,7 @@ jobs:
     if: ${{ inputs.opengrep-generic-rules != '' }}
     runs-on: ${{ inputs.runner-os }}
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v6.0.2
 
       - name: Install OpenGrep (tag-pinned + Cosign-verified)
         env:
@@ -196,14 +196,14 @@ jobs:
           opengrep scan $configs --sarif --output=opengrep-generic.sarif
         continue-on-error: true
 
-      - uses: github/codeql-action/upload-sarif@v3.27.0
+      - uses: github/codeql-action/upload-sarif@v4.35.3
         if: always() && hashFiles('opengrep-generic.sarif') != ''
         continue-on-error: true  # private repos without GHAS will fail here; that's OK
         with:
           sarif_file: opengrep-generic.sarif
           category: opengrep-generic
       - name: Archive SARIF as workflow artifact
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@v7.0.1
         if: always() && hashFiles('opengrep-generic.sarif') != ''
         with:
           name: sarif-opengrep-generic
@@ -214,7 +214,7 @@ jobs:
   # ---------- SCA ----------
   osv-scanner:
     name: OSV-Scanner (SCA)
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v1.9.2
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.3.5
     permissions:
       contents: read
       security-events: write
@@ -225,9 +225,9 @@ jobs:
     name: Trivy (filesystem + IaC)
     runs-on: ${{ inputs.runner-os }}
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v6.0.2
       - name: Run Trivy
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scanners: vuln,secret,misconfig
@@ -235,14 +235,14 @@ jobs:
           output: trivy.sarif
           severity: ${{ inputs.trivy-severity }}
           ignore-unfixed: true
-      - uses: github/codeql-action/upload-sarif@v3.27.0
+      - uses: github/codeql-action/upload-sarif@v4.35.3
         if: always()
         continue-on-error: true  # private repos without GHAS will fail here; that's OK
         with:
           sarif_file: trivy.sarif
           category: trivy
       - name: Archive SARIF as workflow artifact
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@v7.0.1
         if: always() && hashFiles('trivy.sarif') != ''
         with:
           name: sarif-trivy
@@ -256,24 +256,24 @@ jobs:
     if: ${{ inputs.enable-trufflehog && github.event_name == 'pull_request' }}
     runs-on: ${{ inputs.runner-os }}
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v6.0.2
         with:
           fetch-depth: 0
       - name: TruffleHog scan (diff)
-        uses: trufflesecurity/trufflehog@v3.82.13
+        uses: trufflesecurity/trufflehog@v3.95.2
         with:
           base: ${{ github.event.pull_request.base.sha }}
           head: ${{ github.event.pull_request.head.sha }}
           extra_args: --results=verified,unknown --sarif --output=trufflehog.sarif
         continue-on-error: true
-      - uses: github/codeql-action/upload-sarif@v3.27.0
+      - uses: github/codeql-action/upload-sarif@v4.35.3
         if: always() && hashFiles('trufflehog.sarif') != ''
         continue-on-error: true  # private repos without GHAS will fail here; that's OK
         with:
           sarif_file: trufflehog.sarif
           category: trufflehog-diff
       - name: Archive SARIF as workflow artifact
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@v7.0.1
         if: always() && hashFiles('trufflehog.sarif') != ''
         with:
           name: sarif-trufflehog-diff
@@ -287,22 +287,22 @@ jobs:
     if: ${{ inputs.enable-trufflehog && github.event_name != 'pull_request' }}
     runs-on: ${{ inputs.runner-os }}
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v6.0.2
         with:
           fetch-depth: 0
       - name: TruffleHog scan (history)
-        uses: trufflesecurity/trufflehog@v3.82.13
+        uses: trufflesecurity/trufflehog@v3.95.2
         with:
           extra_args: --results=verified --sarif --output=trufflehog.sarif
         continue-on-error: true
-      - uses: github/codeql-action/upload-sarif@v3.27.0
+      - uses: github/codeql-action/upload-sarif@v4.35.3
         if: always() && hashFiles('trufflehog.sarif') != ''
         continue-on-error: true  # private repos without GHAS will fail here; that's OK
         with:
           sarif_file: trufflehog.sarif
           category: trufflehog-history
       - name: Archive SARIF as workflow artifact
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@v7.0.1
         if: always() && hashFiles('trufflehog.sarif') != ''
         with:
           name: sarif-trufflehog-history
@@ -323,7 +323,7 @@ jobs:
     runs-on: ${{ inputs.runner-os }}
     steps:
       - name: Download all SARIF artifacts
-        uses: actions/download-artifact@v4.3.0
+        uses: actions/download-artifact@v8.0.1
         with:
           pattern: sarif-*
           path: sarifs
