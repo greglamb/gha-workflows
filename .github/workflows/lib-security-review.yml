@@ -113,6 +113,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.2
 
+      # Cosign is required by `install.sh --verify-signatures` (next step).
+      # GitHub-hosted runners don't ship with cosign so we install it first.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.1
+
       - name: Install OpenGrep (tag-pinned + Cosign-verified)
         env:
           OPENGREP_VERSION: ${{ inputs.opengrep-version }}
@@ -175,6 +180,10 @@ jobs:
     runs-on: ${{ inputs.runner-os }}
     steps:
       - uses: actions/checkout@v6.0.2
+
+      # Cosign is required by `install.sh --verify-signatures` (next step).
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.1
 
       - name: Install OpenGrep (tag-pinned + Cosign-verified)
         env:
