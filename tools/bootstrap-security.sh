@@ -26,6 +26,7 @@ APPLY_WORKFLOW=1
 APPLY_SETTINGS=1
 APPLY_GITLEAKS=1
 APPLY_BRANCH_PROTECTION=0
+BUMP_ONLY=0
 FORCE=0
 DRY_RUN=0
 
@@ -65,6 +66,11 @@ Options:
   --no-settings               Skip gh api calls (no setting changes)
   --no-gitleaks               Skip local gitleaks pre-commit hook setup
   --branch-protection         Apply branch protection on default branch
+  --bump                      In-place bump the workflow pin in
+                                .github/workflows/security.yml to the
+                                resolved --workflow-ref (latest release
+                                if unspecified) and exit. Skips
+                                dependabot/settings/gitleaks/branch-protection.
   --force                     Overwrite existing files
   --dry-run                   Show actions without executing
   -h, --help                  Show this help
@@ -276,6 +282,46 @@ jobs:
 EOF
 }
 
+# ---------- In-place pin bump ----------
+
+# Update the @<ref> portion of any line in .github/workflows/security.yml that
+# uses our reusable workflow, to the value of WORKFLOW_REF. Preserves any
+# user customization elsewhere in the file (triggers, comments, override
+# blocks). Refuses to run if the file does not exist.
+workflow::bump() {
+  local file=".github/workflows/security.yml"
+  if [ ! -f "$file" ]; then
+    log::die "$file does not exist — nothing to bump (run without --bump to bootstrap from scratch)"
+  fi
+
+  # Match the @<ref> following ${WORKFLOW_REPO}/${REUSABLE_WORKFLOW}@ and
+  # capture the existing ref. Stops at whitespace, quote, or end-of-line.
+  local current
+  current=$(grep -oE "${WORKFLOW_REPO}/${REUSABLE_WORKFLOW}@[^[:space:]\"']+" "$file" | head -1 | sed -E "s|.*@||")
+
+  if [ -z "$current" ]; then
+    log::die "could not find a pin matching ${WORKFLOW_REPO}/${REUSABLE_WORKFLOW}@ in $file"
+  fi
+
+  if [ "$current" = "$WORKFLOW_REF" ]; then
+    log::ok "$file already pinned to $WORKFLOW_REF (no change)"
+    return 0
+  fi
+
+  log::info "bumping $file: @${current} -> @${WORKFLOW_REF}"
+
+  if [ "$DRY_RUN" = 1 ]; then
+    log::dim "DRY: in-place sed replace"
+    return 0
+  fi
+
+  # `sed -i.bak` works on both BSD (macOS) and GNU sed; the .bak extension
+  # is the portable form. Drop the backup once sed completes successfully.
+  sed -i.bak -E "s|(${WORKFLOW_REPO}/${REUSABLE_WORKFLOW}@)[^[:space:]\"']+|\\1${WORKFLOW_REF}|g" "$file"
+  rm -f "${file}.bak"
+  log::ok "wrote $file"
+}
+
 # ---------- Local pre-commit hook (gitleaks) ----------
 
 # Invoke shared/setup-gitleaks.sh against the consumer's repo (cwd).
@@ -356,6 +402,7 @@ parse_args() {
       --no-settings)   APPLY_SETTINGS=0;   shift ;;
       --no-gitleaks)   APPLY_GITLEAKS=0;   shift ;;
       --branch-protection) APPLY_BRANCH_PROTECTION=1; shift ;;
+      --bump)    BUMP_ONLY=1; shift ;;
       --force)   FORCE=1;   shift ;;
       --dry-run) DRY_RUN=1; shift ;;
       -h|--help) usage; exit 0 ;;
@@ -379,6 +426,14 @@ main() {
       log::die "could not resolve latest release of $WORKFLOW_REPO via gh — pass --workflow-ref <tag> explicitly"
     fi
     log::info "resolved --workflow-ref to latest release: $WORKFLOW_REF"
+  fi
+
+  # --bump short-circuits the rest of the bootstrap.
+  if [ "$BUMP_ONLY" = 1 ]; then
+    [ "$DRY_RUN" = 1 ] && log::warn "DRY RUN — no changes will be made"
+    workflow::bump
+    log::ok "done."
+    return 0
   fi
 
   local nwo branch
