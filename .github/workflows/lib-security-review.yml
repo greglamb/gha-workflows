@@ -131,7 +131,7 @@ jobs:
           INSTALL_SH_URL="https://raw.githubusercontent.com/opengrep/opengrep/${OPENGREP_VERSION}/install.sh"
           curl --fail --silent --show-error --location "$INSTALL_SH_URL" \
             | bash -s -- -v "${OPENGREP_VERSION}" --verify-signatures
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.opengrep/cli/latest" >> "$GITHUB_PATH"
 
       - name: Confirm OpenGrep version
         run: opengrep --version
@@ -193,7 +193,7 @@ jobs:
           INSTALL_SH_URL="https://raw.githubusercontent.com/opengrep/opengrep/${OPENGREP_VERSION}/install.sh"
           curl --fail --silent --show-error --location "$INSTALL_SH_URL" \
             | bash -s -- -v "${OPENGREP_VERSION}" --verify-signatures
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.opengrep/cli/latest" >> "$GITHUB_PATH"
 
       - name: Run OpenGrep generic-mode rules
         env:
