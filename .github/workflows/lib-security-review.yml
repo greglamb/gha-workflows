@@ -38,7 +38,7 @@
 #   - Third-party action refs should be SHA-pinned via tools/pin-actions
 #     before merging. `--check` mode of that script is suitable for CI gating.
 
-name: zz · lib · Security review
+name: ~lib-security-review
 
 on:
   workflow_call:
