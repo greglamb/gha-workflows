@@ -8,7 +8,7 @@
 # optional auto-PR. Triggers (schedule/dispatch) live in the CALLER, not here.
 # This file only declares `workflow_call`. See caller template for the wire-up.
 
-name: Sync branch to remote (reusable)
+name: zz · lib · Sync branch to remote
 
 on:
   workflow_call:
