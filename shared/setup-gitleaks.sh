@@ -2,29 +2,15 @@
 # setup-gitleaks.sh — install gitleaks as a pre-commit hook in the current repo.
 # Bash 3.2.57+ compatible (macOS default).
 #
-# Usage:
-#   cd /path/to/your/project
-#   ./setup-gitleaks.sh
-#
-# Behaviour:
-#   - installs the gitleaks binary if missing (brew preferred, otherwise
-#     downloads a pinned release tarball into ~/.local/bin)
-#   - sets `core.hooksPath` to `.githooks` if unset (so the hook is shared
-#     with anyone who clones the repo + runs the project's bootstrap)
-#   - writes / updates a marker-bounded gitleaks block in
-#     .githooks/pre-commit, leaving any existing hook content alone
-#   - creates .gitleaks.toml with an empty allowlist if missing
-#   - runs an initial scan against the working tree
-#   - if the index is clean, commits the two config files
-#
-# No Python, no pre-commit framework, no .pre-commit-config.yaml.
+# Run with --help for full usage. No Python, no pre-commit framework,
+# no .pre-commit-config.yaml.
 #
 # ─── Updating gitleaks ───────────────────────────────────────────────────────
 # 1. Read the gitleaks release notes:
 #      https://github.com/gitleaks/gitleaks/releases
 #    Past minors have included breaking config changes (e.g. composite rules
 #    in v8.28.0) — review before bumping.
-# 2. Bump GITLEAKS_VERSION below.
+# 2. Bump GITLEAKS_VERSION below (or pass --gitleaks-version on the CLI).
 # 3. Re-run this script. The check at the top warns if the installed version
 #    no longer matches the pin; on macOS with brew you may need
 #    `brew upgrade gitleaks` (brew can't pin to a specific version).
@@ -35,14 +21,60 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-# ---- pinned versions ----
+# ---- defaults ----
 GITLEAKS_VERSION="8.30.1"
+APPLY_COMMIT=1
+APPLY_SCAN=1
+FORCE=0
 
 # ---- logging helpers ----
 gl::info()  { printf '\033[1;34m[gitleaks-setup]\033[0m %s\n' "$*"; }
 gl::warn()  { printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
 gl::error() { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; }
 gl::die()   { gl::error "$*"; exit 1; }
+
+# ---- usage ----
+gl::usage() {
+  cat <<EOF
+Usage: $(basename "$0") [options]
+
+Install gitleaks as a pre-commit hook in the current git repo.
+
+Options:
+  --no-commit                Don't auto-commit .gitleaks.toml and the hook
+  --no-scan                  Skip the initial gitleaks scan of the working tree
+  --force                    Overwrite .gitleaks.toml if it exists
+  --gitleaks-version <ver>   Pin the gitleaks binary version
+                               (default: ${GITLEAKS_VERSION})
+  -h, --help                 Show this help
+
+Behavior:
+  - Installs gitleaks if missing (brew preferred, otherwise downloads
+    a pinned release tarball into ~/.local/bin).
+  - Sets core.hooksPath to .githooks if unset; refuses to override if
+    it points elsewhere.
+  - Splices a marker-bounded gitleaks block into .githooks/pre-commit,
+    leaving any existing hook content alone.
+  - Creates .gitleaks.toml if missing (use --force to overwrite).
+  - Runs an initial scan; aborts before committing if it finds anything.
+  - Auto-commits the two config files only if the index is otherwise
+    clean (so unrelated staged work is never bundled in).
+EOF
+}
+
+# ---- parse args ----
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-commit)         APPLY_COMMIT=0; shift ;;
+    --no-scan)           APPLY_SCAN=0; shift ;;
+    --force)             FORCE=1; shift ;;
+    --gitleaks-version)
+      [ $# -ge 2 ] || gl::die "--gitleaks-version requires an argument"
+      GITLEAKS_VERSION="$2"; shift 2 ;;
+    -h|--help)           gl::usage; exit 0 ;;
+    *) gl::die "unknown flag: $1 (try --help)" ;;
+  esac
+done
 
 # ---- preflight ----
 [ -d .git ] || gl::die "current directory is not a git repository (cd into your project root or run 'git init' first)"
@@ -191,11 +223,15 @@ fi'
 
 # ---- 4. create .gitleaks.toml with an empty allowlist if missing ----
 gl::write_gitleaks_config() {
-  if [ -f .gitleaks.toml ]; then
-    gl::info ".gitleaks.toml already exists; leaving as-is"
+  if [ -f .gitleaks.toml ] && [ "$FORCE" != 1 ]; then
+    gl::info ".gitleaks.toml already exists; leaving as-is (use --force to overwrite)"
     return 0
   fi
-  gl::info "creating .gitleaks.toml"
+  if [ -f .gitleaks.toml ]; then
+    gl::warn "overwriting existing .gitleaks.toml (--force)"
+  else
+    gl::info "creating .gitleaks.toml"
+  fi
   # Minimal valid config — gitleaks ships with built-in rules, so the only
   # thing this file needs to do is exist (so gitleaks finds it and treats
   # the repo root as the project root for allowlist paths). Allowlist
@@ -271,7 +307,16 @@ gl::ensure_gitleaks
 gl::ensure_hookspath
 gl::write_gitleaks_config
 gl::install_hook_block
-gl::initial_scan
-gl::commit_config
+if [ "$APPLY_SCAN" = 1 ]; then
+  gl::initial_scan
+else
+  gl::info "skipping initial scan (--no-scan)"
+fi
+
+if [ "$APPLY_COMMIT" = 1 ]; then
+  gl::commit_config
+else
+  gl::info "skipping auto-commit (--no-commit)"
+fi
 
 gl::info "done. gitleaks will run on every commit via .githooks/pre-commit."
