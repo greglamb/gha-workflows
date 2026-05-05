@@ -125,6 +125,10 @@ fetch_latest_ref() {
     | sort -V \
     | tail -1)
   [ -n "$ref" ] && echo "$ref"
+  # Explicit return: a trailing `&&` chain whose left side fails leaves
+  # the function with a non-zero exit code, which under `set -e` would
+  # make the call site silently exit even though we mean "no result".
+  return 0
 }
 
 # Download the reusable workflow into the consuming repo (inline mode).
@@ -210,6 +214,12 @@ detect::ecosystems() {
   [ -f composer.json ] && detect::add "composer"
   [ -f pom.xml ]       && detect::add "maven"
   ls -1 build.gradle* 2>/dev/null | grep -q . && detect::add "gradle"
+  # Explicit return: under `set -e`, errexit is suspended for the left
+  # side of an `&&` chain, but if the chain is the LAST statement of a
+  # function its non-zero exit code becomes the function's return code,
+  # and the call site silently exits. Trip-wire for repos that don't
+  # match the last detector (e.g. no Gradle files in a TypeScript repo).
+  return 0
 }
 
 # ---------- File generation ----------
