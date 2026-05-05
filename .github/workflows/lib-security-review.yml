@@ -237,10 +237,15 @@ jobs:
       - name: Run OSV-Scanner
         uses: google/osv-scanner-action/osv-scanner-action@v2.3.5
         with:
+          # --allow-no-lockfiles: don't error on repos without dep manifests
+          #   (e.g. native macOS/Swift apps). Without it OSV exits 128 and
+          #   no SARIF is written.
+          # --output-file: --output is deprecated as of osv-scanner v2.x.
           scan-args: |-
             --recursive
+            --allow-no-lockfiles
             --format=sarif
-            --output=osv-scanner.sarif
+            --output-file=osv-scanner.sarif
             ./
         continue-on-error: true
       - uses: github/codeql-action/upload-sarif@v4.35.3
@@ -289,33 +294,44 @@ jobs:
           overwrite: true
 
   # ---------- Secrets: PR-diff mode (fast, every PR, broader detector net) ----------
+  # TruffleHog v3 has no native SARIF output (`--sarif` is not a real flag).
+  # We install the binary directly via the official goreleaser install.sh
+  # script — pinned to a tag — and capture --json output to a file we can
+  # archive and aggregate. Same pattern the OpenGrep job uses.
   trufflehog-diff:
     name: TruffleHog (PR diff)
     if: ${{ inputs.enable-trufflehog && github.event_name == 'pull_request' }}
     runs-on: ${{ inputs.runner-os }}
+    env:
+      TRUFFLEHOG_VERSION: v3.95.2
     steps:
       - uses: actions/checkout@v6.0.2
         with:
           fetch-depth: 0
+      - name: Install TruffleHog
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          curl --fail --silent --show-error --location \
+            "https://raw.githubusercontent.com/trufflesecurity/trufflehog/${TRUFFLEHOG_VERSION}/scripts/install.sh" \
+            | sh -s -- -b "$HOME/.local/bin" "${TRUFFLEHOG_VERSION}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: TruffleHog scan (diff)
-        uses: trufflesecurity/trufflehog@v3.95.2
-        with:
-          base: ${{ github.event.pull_request.base.sha }}
-          head: ${{ github.event.pull_request.head.sha }}
-          extra_args: --results=verified,unknown --sarif --output=trufflehog.sarif
+        run: |
+          set -euo pipefail
+          trufflehog git "file://${GITHUB_WORKSPACE}" \
+            --since-commit "${{ github.event.pull_request.base.sha }}" \
+            --branch "${{ github.event.pull_request.head.sha }}" \
+            --results=verified,unknown \
+            --json \
+            > trufflehog.json || true
         continue-on-error: true
-      - uses: github/codeql-action/upload-sarif@v4.35.3
-        if: always() && hashFiles('trufflehog.sarif') != ''
-        continue-on-error: true  # private repos without GHAS will fail here; that's OK
-        with:
-          sarif_file: trufflehog.sarif
-          category: trufflehog-diff
-      - name: Archive SARIF as workflow artifact
+      - name: Archive findings as workflow artifact
         uses: actions/upload-artifact@v7.0.1
-        if: always() && hashFiles('trufflehog.sarif') != ''
+        if: always() && hashFiles('trufflehog.json') != ''
         with:
-          name: sarif-trufflehog-diff
-          path: trufflehog.sarif
+          name: trufflehog-diff
+          path: trufflehog.json
           retention-days: 30
           overwrite: true
 
@@ -324,27 +340,34 @@ jobs:
     name: TruffleHog (full history)
     if: ${{ inputs.enable-trufflehog && github.event_name != 'pull_request' }}
     runs-on: ${{ inputs.runner-os }}
+    env:
+      TRUFFLEHOG_VERSION: v3.95.2
     steps:
       - uses: actions/checkout@v6.0.2
         with:
           fetch-depth: 0
+      - name: Install TruffleHog
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          curl --fail --silent --show-error --location \
+            "https://raw.githubusercontent.com/trufflesecurity/trufflehog/${TRUFFLEHOG_VERSION}/scripts/install.sh" \
+            | sh -s -- -b "$HOME/.local/bin" "${TRUFFLEHOG_VERSION}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: TruffleHog scan (history)
-        uses: trufflesecurity/trufflehog@v3.95.2
-        with:
-          extra_args: --results=verified --sarif --output=trufflehog.sarif
+        run: |
+          set -euo pipefail
+          trufflehog git "file://${GITHUB_WORKSPACE}" \
+            --results=verified \
+            --json \
+            > trufflehog.json || true
         continue-on-error: true
-      - uses: github/codeql-action/upload-sarif@v4.35.3
-        if: always() && hashFiles('trufflehog.sarif') != ''
-        continue-on-error: true  # private repos without GHAS will fail here; that's OK
-        with:
-          sarif_file: trufflehog.sarif
-          category: trufflehog-history
-      - name: Archive SARIF as workflow artifact
+      - name: Archive findings as workflow artifact
         uses: actions/upload-artifact@v7.0.1
-        if: always() && hashFiles('trufflehog.sarif') != ''
+        if: always() && hashFiles('trufflehog.json') != ''
         with:
-          name: sarif-trufflehog-history
-          path: trufflehog.sarif
+          name: trufflehog-history
+          path: trufflehog.json
           retention-days: 30
           overwrite: true
 
@@ -360,12 +383,14 @@ jobs:
     needs: [opengrep, opengrep-generic, osv-scanner, trivy, trufflehog-diff, trufflehog-history]
     runs-on: ${{ inputs.runner-os }}
     steps:
-      - name: Download all SARIF artifacts
+      - name: Download all findings artifacts
         uses: actions/download-artifact@v8.0.1
         with:
-          pattern: sarif-*
-          path: sarifs
-        continue-on-error: true  # tolerate scanners that didn't run / produced no SARIF
+          # Match SARIF artifacts (sarif-*) and the TruffleHog JSON
+          # artifacts (trufflehog-*) — TruffleHog has no native SARIF.
+          pattern: '{sarif-*,trufflehog-*}'
+          path: findings
+        continue-on-error: true  # tolerate scanners that didn't run / produced no output
 
       - name: Render markdown summary
         if: always()
@@ -376,14 +401,15 @@ jobs:
           python3 - <<'PYEOF' >> "$GITHUB_STEP_SUMMARY"
           import json, os, pathlib
 
-          # artifact directory name -> human-readable scanner name
+          # artifact directory name -> (human-readable scanner name, format)
+          # format: 'sarif' | 'trufflehog-jsonl'
           SCANNERS = [
-              ("sarif-opengrep",            "OpenGrep (SAST)"),
-              ("sarif-opengrep-generic",    "OpenGrep (generic mode)"),
-              ("sarif-osv-scanner",         "OSV-Scanner (SCA)"),
-              ("sarif-trivy",               "Trivy (filesystem + IaC)"),
-              ("sarif-trufflehog-diff",     "TruffleHog (PR diff)"),
-              ("sarif-trufflehog-history",  "TruffleHog (full history)"),
+              ("sarif-opengrep",            "OpenGrep (SAST)",          "sarif"),
+              ("sarif-opengrep-generic",    "OpenGrep (generic mode)",  "sarif"),
+              ("sarif-osv-scanner",         "OSV-Scanner (SCA)",        "sarif"),
+              ("sarif-trivy",               "Trivy (filesystem + IaC)", "sarif"),
+              ("trufflehog-diff",           "TruffleHog (PR diff)",     "trufflehog-jsonl"),
+              ("trufflehog-history",        "TruffleHog (full history)","trufflehog-jsonl"),
           ]
           SEV_EMOJI = {"error": "🔴", "warning": "🟡", "note": "🔵", "none": "⚪"}
           MAX_DETAIL_ROWS = 25
@@ -408,18 +434,51 @@ jobs:
                       findings.append({"sev": sev, "rule": rule, "msg": msg, "file": file_, "line": line})
               return findings, None
 
+          def parse_trufflehog_jsonl(path):
+              # TruffleHog --json emits one JSON object per line. Each object
+              # has SourceMetadata.Data.{Git,Filesystem}.{file,line},
+              # DetectorName, Verified.
+              findings = []
+              try:
+                  for raw in path.read_text().splitlines():
+                      raw = raw.strip()
+                      if not raw:
+                          continue
+                      try:
+                          r = json.loads(raw)
+                      except Exception:
+                          continue
+                      meta = (r.get("SourceMetadata") or {}).get("Data") or {}
+                      loc = meta.get("Git") or meta.get("Filesystem") or {}
+                      file_ = loc.get("file", "")
+                      line = loc.get("line", "")
+                      detector = r.get("DetectorName", "")
+                      verified = bool(r.get("Verified"))
+                      sev = "error" if verified else "warning"
+                      msg = "Verified secret" if verified else "Unverified secret"
+                      findings.append({"sev": sev, "rule": detector, "msg": msg, "file": file_, "line": line})
+              except Exception as e:
+                  return None, f"(failed to parse: {e})"
+              return findings, None
+
+          PARSERS = {
+              "sarif": (parse_sarif, "*.sarif"),
+              "trufflehog-jsonl": (parse_trufflehog_jsonl, "*.json"),
+          }
+
           # Collect findings per scanner
           results = {}
-          for art_dir, name in SCANNERS:
-              dir_path = pathlib.Path("sarifs") / art_dir
+          for art_dir, name, fmt in SCANNERS:
+              dir_path = pathlib.Path("findings") / art_dir
               if not dir_path.is_dir():
                   results[name] = ("skipped", None)
                   continue
-              sarif_files = list(dir_path.glob("*.sarif"))
-              if not sarif_files:
+              parser, glob = PARSERS[fmt]
+              files = list(dir_path.glob(glob))
+              if not files:
                   results[name] = ("no_output", None)
                   continue
-              findings, err = parse_sarif(sarif_files[0])
+              findings, err = parser(files[0])
               if err:
                   results[name] = ("error", err)
               else:
@@ -436,12 +495,12 @@ jobs:
           # Overview table
           print("| Scanner | Findings | Status |")
           print("|---|---:|---|")
-          for _, name in SCANNERS:
+          for _, name, _fmt in SCANNERS:
               status, payload = results[name]
               if status == "skipped":
                   print(f"| {name} | — | _not run_ |")
               elif status == "no_output":
-                  print(f"| {name} | — | _no SARIF produced_ |")
+                  print(f"| {name} | — | _no findings file produced_ |")
               elif status == "error":
                   print(f"| {name} | — | _{payload}_ |")
               else:
@@ -451,7 +510,7 @@ jobs:
           print()
 
           # Per-scanner detail tables
-          for _, name in SCANNERS:
+          for _, name, _fmt in SCANNERS:
               status, findings = results[name]
               if status != "ok" or not findings:
                   continue
@@ -467,7 +526,8 @@ jobs:
                   print(f"| {emoji} {f['sev']} | {loc} | {rule} | {msg} |")
               if len(findings) > MAX_DETAIL_ROWS:
                   print()
-                  print(f"_…and {len(findings) - MAX_DETAIL_ROWS} more. Download the `{[d for d, n in SCANNERS if n == name][0]}` artifact from the [run page](" + os.environ.get("RUN_URL", "") + ") for full details._")
+                  art = [d for d, n, _ in SCANNERS if n == name][0]
+                  print(f"_…and {len(findings) - MAX_DETAIL_ROWS} more. Download the `{art}` artifact from the [run page](" + os.environ.get("RUN_URL", "") + ") for full details._")
               print()
 
           # Footer
