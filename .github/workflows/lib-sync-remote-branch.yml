@@ -1,4 +1,14 @@
-name: Sync branch to remote
+# gha-workflows/.github/workflows/lib-sync-remote-branch.yml
+#
+# REUSABLE upstream-mirror workflow. Lives in the central gha-workflows repo.
+# Consumed by per-repo caller workflows via `uses:`.
+#
+# Mirrors a branch from an external repository into a target branch in the
+# calling repo, with optional handling of upstream workflow files and an
+# optional auto-PR. Triggers (schedule/dispatch) live in the CALLER, not here.
+# This file only declares `workflow_call`. See caller template for the wire-up.
+
+name: Sync branch to remote (reusable)
 
 on:
   workflow_call:

@@ -1,4 +1,4 @@
-# gha-workflows/.github/workflows/security.yml
+# gha-workflows/.github/workflows/lib-security-review.yml
 #
 # REUSABLE security workflow. Lives in the central gha-workflows repo.
 # Consumed by per-repo caller workflows via `uses:`.
