@@ -1,0 +1,111 @@
+# gha-workflows/.github/workflows/security.yml
+#
+# REUSABLE security workflow. Lives in the central gha-workflows repo.
+# Consumed by per-repo caller workflows via `uses:`.
+#
+# Triggers (push/PR/schedule) live in the CALLER, not here. This file
+# only declares `workflow_call`. See caller template for the wire-up.
+
+name: Security (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      semgrep-extra-rules:
+        description: "Space-separated extra Semgrep rule packs (e.g. 'p/python p/django')"
+        required: false
+        type: string
+        default: ""
+      trivy-severity:
+        description: "Comma-separated Trivy severity levels"
+        required: false
+        type: string
+        default: "CRITICAL,HIGH,MEDIUM"
+      enable-gitleaks:
+        description: "Run gitleaks history scan. Disable for org private repos without a license."
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+  pull-requests: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------- SAST ----------
+  semgrep:
+    name: Semgrep (SAST)
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Semgrep
+        env:
+          SEMGREP_RULES: >-
+            p/default
+            p/security-audit
+            p/secrets
+            p/owasp-top-ten
+            p/javascript
+            p/typescript
+            p/csharp
+            ${{ inputs.semgrep-extra-rules }}
+        run: semgrep scan --sarif --output=semgrep.sarif
+        continue-on-error: true
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  # ---------- SCA ----------
+  osv-scanner:
+    name: OSV-Scanner (SCA)
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v1.9.0
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+  # ---------- Filesystem / IaC / containers ----------
+  trivy:
+    name: Trivy (filesystem + IaC)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          format: sarif
+          output: trivy.sarif
+          severity: ${{ inputs.trivy-severity }}
+          ignore-unfixed: true
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy.sarif
+          category: trivy
+
+  # ---------- Secrets (history) ----------
+  gitleaks:
+    name: Gitleaks (git history secrets)
+    if: ${{ inputs.enable-gitleaks }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITLEAKS_LICENSE only required for GitHub *Organization* private repos.
+          # GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
