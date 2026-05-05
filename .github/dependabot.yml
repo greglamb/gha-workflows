@@ -31,11 +31,15 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
-    # Group all action updates into a single weekly PR so one review covers
-    # the whole batch. Solo-dev-friendly: less PR noise, single CI run.
+    # Group only non-major action updates into a single weekly PR — minor
+    # and patch bumps are usually safe and one review covers the batch.
+    # Major bumps fall outside the group and arrive as individual PRs so
+    # each one gets its own review (release notes for major versions
+    # routinely contain breaking changes).
     groups:
       actions:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: "deps"
       include: "scope"
