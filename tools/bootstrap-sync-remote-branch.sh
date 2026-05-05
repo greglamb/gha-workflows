@@ -6,8 +6,8 @@ BRANCH="main"
 SYNC_BRANCH="upstream-sync"
 CRON=""
 REMOTE_NAME="upstream"
-MODE="inline"
-CALLER_REF="v2"
+MODE="caller"
+CALLER_REF=""  # Resolved to latest release via gh if empty after arg parsing
 WORKFLOWS_REPO="greglamb/gha-workflows"
 REUSABLE_WORKFLOW=".github/workflows/lib-sync-remote-branch.yml"
 DISABLE_WORKFLOWS="rename"
@@ -27,17 +27,19 @@ _SET_REMOTE_NAME=false _SET_WORKFLOWS_REPO=false _SET_CALLER_REF=false
 _SET_DISABLE_WF=false _SET_RENAME_DIR=false _SET_AUTO_PR=false _SET_PR_BASE=false
 
 usage() {
+  local self
+  self="$(basename "$0")"
   cat <<EOF
-ghPrivateSyncSetup — set up GitHub Actions upstream sync for private repo mirrors
+${self} — set up GitHub Actions upstream sync for private repo mirrors
 
-Usage: ghPrivateSyncSetup <upstream-url> [options]
+Usage: ${self} <upstream-url> [options]
 
 Syncs a public upstream repo into a dedicated branch in your private repo.
 Adds a git remote and generates a GitHub Actions workflow. PR from the
 sync branch into main to review changes on your terms.
 
 Options:
-  -m, --mode <inline|caller>           Workflow strategy (default: inline)
+  -m, --mode <inline|caller>           Workflow strategy (default: caller)
   -b, --branch <name>                  Upstream branch to track (default: main)
   -s, --sync-branch <name>             Local sync branch (default: upstream-sync)
   -c, --cron <expr>                    Cron schedule (default: off, dispatch only)
@@ -45,7 +47,7 @@ Options:
   -d, --disable-workflows <mode>       rename|delete|keep (default: rename)
   --rename-dir <path>                  Rename destination (default: .github/workflows-upstream)
   --workflows-repo <owner/repo>        Reusable workflow source (default: greglamb/gha-workflows)
-  --caller-ref <ref>                   Workflow repo ref (default: v2)
+  --caller-ref <ref>                   Workflow repo ref (default: latest release via gh)
   --auto-pr                            Auto-create PR after sync (default: off)
   --pr-base <branch>                   PR target branch (default: main)
   --dry-run                            Preview output without writing files
@@ -56,23 +58,49 @@ Options:
   -h, --help                           Show this help
 
 Modes:
+  caller   (default) Thin caller to remote reusable workflow at
+           <workflows-repo>@<ref>. Smaller footprint, auto-picks up upstream
+           workflow changes when the pin is bumped.
   inline   Downloads lib-sync-remote-branch.yml into the repo. Self-contained,
            no external dependency at runtime. Update with --update --force.
-  caller   Thin caller to remote reusable workflow at <workflows-repo>@<ref>.
-           Smaller footprint, auto-picks up upstream workflow changes.
+
+Caller ref resolution:
+  When --caller-ref is omitted, the script queries GitHub for the latest
+  release of <workflows-repo> using \`gh\`. Requires \`gh\` to be installed
+  and authenticated. Pass --caller-ref explicitly to skip the lookup.
 
 Environment:
   GH_TOKEN / GITHUB_TOKEN   Authenticates private repo downloads (inline mode)
 
 Examples:
-  ghPrivateSyncSetup https://github.com/ZStud/reef.git -s upstream-ZStud-reef
-  ghPrivateSyncSetup https://github.com/org/repo.git -m caller -c "0 6 * * 1"
-  ghPrivateSyncSetup https://github.com/org/repo.git --auto-pr --pr-base develop
-  ghPrivateSyncSetup https://github.com/org/repo.git -d delete
-  ghPrivateSyncSetup https://github.com/org/repo.git --dry-run
-  ghPrivateSyncSetup https://github.com/org/repo.git --update --force
-  ghPrivateSyncSetup https://github.com/org/repo.git --workflows-repo myorg/wf --caller-ref main
+  ${self} https://github.com/ZStud/reef.git -s upstream-ZStud-reef
+  ${self} https://github.com/org/repo.git -m caller -c "0 6 * * 1"
+  ${self} https://github.com/org/repo.git --auto-pr --pr-base develop
+  ${self} https://github.com/org/repo.git -d delete
+  ${self} https://github.com/org/repo.git --dry-run
+  ${self} https://github.com/org/repo.git --update --force
+  ${self} https://github.com/org/repo.git --workflows-repo myorg/wf --caller-ref main
 EOF
+}
+
+# Look up the latest release tag of WORKFLOWS_REPO via gh.
+# Prefers `gh release view` (GitHub Releases). Falls back to the highest
+# CalVer-shaped tag (v0.YYMM.DDBB) if no Releases exist. Returns empty on
+# any failure — caller is responsible for surfacing a clear error.
+fetch_latest_ref() {
+  local repo="$1"
+  command -v gh >/dev/null 2>&1 || return 0
+  local ref
+  ref=$(gh release view --repo "$repo" --json tagName -q .tagName 2>/dev/null || true)
+  if [[ -n "$ref" ]]; then
+    echo "$ref"
+    return 0
+  fi
+  ref=$(gh api --paginate "/repos/$repo/tags" --jq '.[].name' 2>/dev/null \
+    | grep -E '^v0\.[0-9]{4}\.[0-9]+$' \
+    | sort -V \
+    | tail -1)
+  [[ -n "$ref" ]] && echo "$ref"
 }
 
 # --- Workflow generators ---
@@ -81,9 +109,12 @@ generate_caller_workflow() {
   local uses_path="$1"  # remote or local path
   local pr_inputs=""
   local pr_with=""
+  local schedule_block=""
 
   if [[ "$AUTO_PR" == true ]]; then
-    pr_inputs="      create_pr:
+    # Each block starts with a leading newline so it appends cleanly after
+    # the prior line's content; empty values inject nothing.
+    pr_inputs=$'\n'"      create_pr:
         description: \"Auto-create PR from sync branch into pr_base\"
         required: false
         type: boolean
@@ -91,11 +122,14 @@ generate_caller_workflow() {
       pr_base:
         description: \"Base branch for auto-created PR\"
         required: false
-        default: \"${PR_BASE}\"
-"
-    pr_with="      create_pr: \${{ inputs.create_pr == '' && true || inputs.create_pr }}
-      pr_base: \${{ inputs.pr_base || '${PR_BASE}' }}
-"
+        default: \"${PR_BASE}\""
+    pr_with=$'\n'"      create_pr: \${{ inputs.create_pr == '' && true || inputs.create_pr }}
+      pr_base: \${{ inputs.pr_base || '${PR_BASE}' }}"
+  fi
+
+  if [[ -n "$CRON" ]]; then
+    schedule_block=$'\n'"  schedule:
+    - cron: '${CRON}'"
   fi
 
   cat <<YAML
@@ -128,8 +162,8 @@ on:
       rename_dir:
         description: "Destination directory for renamed workflows (rename mode only)"
         required: false
-        default: "${RENAME_DIR}"
-${pr_inputs}  ${SCHEDULE_BLOCK}
+        default: "${RENAME_DIR}"${pr_inputs}${schedule_block}
+
 permissions:
   contents: write
   pull-requests: write
@@ -142,8 +176,7 @@ jobs:
       source_ref: \${{ inputs.source_ref || '${BRANCH}' }}
       target_ref: \${{ inputs.target_ref || '${SYNC_BRANCH}' }}
       disable_workflows: \${{ inputs.disable_workflows || '${DISABLE_WORKFLOWS}' }}
-      rename_dir: \${{ inputs.rename_dir || '${RENAME_DIR}' }}
-${pr_with}
+      rename_dir: \${{ inputs.rename_dir || '${RENAME_DIR}' }}${pr_with}
 YAML
 }
 
@@ -158,8 +191,8 @@ download_reusable_workflow() {
   fi
 
   if [[ -f "$dest" && "$FORCE" == false ]]; then
-    echo "Error: $dest already exists. Use --force to overwrite." >&2
-    exit 1
+    echo "⏭  $dest already exists — skipping (use --force to overwrite)."
+    return 0
   fi
 
   # Build curl auth header if token is available
@@ -247,6 +280,17 @@ if [[ ! -d .git && "$DRY_RUN" == false ]]; then
   exit 1
 fi
 
+# Resolve CALLER_REF if user didn't pin one explicitly.
+if [[ -z "$CALLER_REF" ]]; then
+  CALLER_REF=$(fetch_latest_ref "$WORKFLOWS_REPO" || true)
+  if [[ -z "$CALLER_REF" ]]; then
+    echo "Error: could not resolve latest release of $WORKFLOWS_REPO via gh." >&2
+    echo "  Hint: install/authenticate gh, or pass --caller-ref <tag> explicitly." >&2
+    exit 1
+  fi
+  echo "ℹ  Resolved --caller-ref to latest release: $CALLER_REF"
+fi
+
 # --update implies --no-remote and skips caller generation
 if [[ "$UPDATE" == true ]]; then
   NO_REMOTE=true
@@ -272,14 +316,6 @@ if [[ "$UPDATE" == true ]]; then
   exit 0
 fi
 
-# Build schedule block
-SCHEDULE_BLOCK=""
-if [[ -n "$CRON" ]]; then
-  SCHEDULE_BLOCK="schedule:
-    - cron: '${CRON}'
-  "
-fi
-
 # Create workflow
 if [[ "$NO_WORKFLOW" == false ]]; then
   WORKFLOW_DIR=".github/workflows"
@@ -300,21 +336,20 @@ if [[ "$NO_WORKFLOW" == false ]]; then
     generate_caller_workflow "$local_uses_path"
     echo ""
   else
-    if [[ -f "$WORKFLOW_FILE" && "$FORCE" == false ]]; then
-      echo "Error: $WORKFLOW_FILE already exists. Use --force to overwrite." >&2
-      exit 1
-    fi
-
     mkdir -p "$WORKFLOW_DIR"
 
-    # Download reusable workflow for inline mode
+    # Download reusable workflow for inline mode (skips if already present
+    # unless --force).
     if [[ "$MODE" == "inline" ]]; then
       download_reusable_workflow
     fi
 
-    # Write caller workflow
-    generate_caller_workflow "$local_uses_path" > "$WORKFLOW_FILE"
-    echo "✓ Created $WORKFLOW_FILE (mode: $MODE)"
+    if [[ -f "$WORKFLOW_FILE" && "$FORCE" == false ]]; then
+      echo "⏭  $WORKFLOW_FILE already exists — skipping (use --force to overwrite)."
+    else
+      generate_caller_workflow "$local_uses_path" > "$WORKFLOW_FILE"
+      echo "✓ Created $WORKFLOW_FILE (mode: $MODE)"
+    fi
   fi
 fi
 

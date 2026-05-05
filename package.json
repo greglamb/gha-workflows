@@ -1,6 +1,6 @@
 {
   "name": "gha-workflows",
-  "version": "0.2605.502",
+  "version": "0.2605.503",
   "description": "Reusable GitHub Actions workflows",
   "private": true,
   "license": "MIT",

@@ -54,7 +54,7 @@ permissions:
 
 jobs:
   sync-upstream:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       SOURCE_REPO: ${{ inputs.source_repo }}
       SOURCE_REF:  ${{ inputs.source_ref }}
@@ -62,7 +62,7 @@ jobs:
       SOURCE_REMOTE: upstream
     steps:
       - name: Checkout repo (no branch changes)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
         with:
           fetch-depth: 0
 

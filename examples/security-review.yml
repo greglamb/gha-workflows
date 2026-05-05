@@ -34,6 +34,10 @@ jobs:
       pull-requests: read
     # Optional overrides:
     # with:
-    #   semgrep-extra-rules: "p/python p/django"
+    #   runner-os: "ubuntu-24.04"          # bump to ubuntu-26.04 once available on GHA
+    #   opengrep-version: "v1.16.0"        # tag-pinned; install.sh + binary verified together
+    #   rules-ref: "<sha>"                 # semgrep-rules SHA; bump after diff review
+    #   opengrep-extra-configs: "./security/rules ./opengrep/cfml.yml"
+    #   opengrep-generic-rules: "./opengrep/generic"  # for languages OpenGrep doesn't parse natively
     #   trivy-severity: "CRITICAL,HIGH"
-    #   enable-gitleaks: false
+    #   enable-trufflehog: false

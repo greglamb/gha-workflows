@@ -1,0 +1,61 @@
+# .github/workflows/sync-upstream.yml
+#
+# PER-REPO caller. Drop this into a repo that needs to mirror an upstream
+# branch into a local branch (e.g. tracking an external project, vendoring
+# a dependency, maintaining a private fork). Triggers live here; logic
+# lives in greglamb/gha-workflows.
+#
+# Pin to a tag (recommended) or a commit SHA for stability.
+# Use @main only during initial rollout / development.
+
+name: Sync Upstream
+
+on:
+  # Manual run from the Actions tab. Inputs default to the values below
+  # but can be overridden per-run.
+  workflow_dispatch:
+    inputs:
+      source_repo:
+        description: "Git URL of source repo"
+        required: true
+        default: "https://github.com/org/repo.git"
+      source_ref:
+        description: "Source branch or ref to mirror"
+        required: true
+        default: "main"
+      target_ref:
+        description: "Target branch (created/overwritten)"
+        required: true
+        default: "upstream-sync"
+      disable_workflows:
+        description: "How to handle upstream workflows: rename, delete, or keep"
+        required: true
+        type: choice
+        options:
+          - rename
+          - delete
+          - keep
+        default: "rename"
+  # Optional schedule — uncomment to mirror automatically.
+  # schedule:
+  #   - cron: '0 6 * * 1'  # weekly Mon 06:00 UTC
+
+permissions:
+  contents: write
+  pull-requests: write   # only required if create_pr is true
+
+jobs:
+  sync:
+    uses: greglamb/gha-workflows/.github/workflows/lib-sync-remote-branch.yml@v0.2605.0501
+    permissions:
+      contents: write
+      pull-requests: write
+    with:
+      source_repo: ${{ inputs.source_repo || 'https://github.com/org/repo.git' }}
+      source_ref:  ${{ inputs.source_ref  || 'main' }}
+      target_ref:  ${{ inputs.target_ref  || 'upstream-sync' }}
+      disable_workflows: ${{ inputs.disable_workflows || 'rename' }}
+      # Optional overrides:
+      # rename_dir: ".github/workflows-upstream"
+      # create_pr: true
+      # pr_base: "main"

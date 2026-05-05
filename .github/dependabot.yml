@@ -1,0 +1,44 @@
+# gha-workflows/.github/dependabot.yml
+#
+# Keeps third-party actions used in reusable workflows current.
+# Targets the gha-workflows repo itself (where this file lives), not the
+# consuming repos that call its workflows.
+#
+# Caveats — what Dependabot does and does not update here:
+#
+#   ✓ `uses: actions/checkout@v4.2.2`             (third-party action refs)
+#   ✓ `uses: aquasecurity/trivy-action@v0.28.0`   (same)
+#   ✓ `uses: trufflesecurity/trufflehog@v3.82.13` (same)
+#
+#   ✗ `inputs.opengrep-version.default: "v1.16.0"`   (input default value)
+#   ✗ `inputs.rules-ref.default: "<sha>"`             (input default value)
+#
+# OpenGrep version bumps are intentionally manual — the engine version is
+# the trust root for the SAST scan, so it gets reviewed when bumping.
+# The rules-ref defaults to `main` for always-current coverage; pin to a
+# SHA in consuming repos if reproducibility matters there.
+#
+#   git ls-remote --tags --sort=-version:refname https://github.com/opengrep/opengrep.git | head -5
+#   git ls-remote https://github.com/semgrep/semgrep-rules.git main
+#
+# (Renovate with regex managers can automate these too if/when needed.)
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    # Group all action updates into a single weekly PR so one review covers
+    # the whole batch. Solo-dev-friendly: less PR noise, single CI run.
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "github-actions"

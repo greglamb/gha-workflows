@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
-# Tag the commit when package.json's version was bumped.
+# Tag the commit when package.json's version changed.
 # Skips during rebase/cherry-pick/merge to avoid tag spam.
+#
+# Compares the version field between HEAD and HEAD~1 instead of diffing
+# the file as a whole — this means amends that touched package.json but
+# did not change the version (e.g. fixing a typo elsewhere in the file)
+# are correctly skipped, while amends that change the version re-tag.
+# If the tag already exists at a different commit (typical after amend),
+# the tag is force-moved to HEAD; the original commit is being abandoned.
 
 set -euo pipefail
 
@@ -19,20 +26,28 @@ fi
 PKG="$ROOT/package.json"
 [[ -f "$PKG" ]] || exit 0
 
-# Only tag if package.json was modified in this commit
+NEW_VERSION=$(jq -r '.version // empty' "$PKG")
+[[ -n "$NEW_VERSION" ]] || exit 0
+
+OLD_VERSION=""
 if git rev-parse HEAD~1 >/dev/null 2>&1; then
-  if ! git diff --name-only HEAD~1 HEAD | grep -qx 'package.json'; then
-    exit 0
-  fi
+  OLD_VERSION=$(git show "HEAD~1:package.json" 2>/dev/null | jq -r '.version // empty' 2>/dev/null || echo "")
 fi
 
-VERSION=$(jq -r '.version // empty' "$PKG")
-[[ -n "$VERSION" ]] || exit 0
+if [[ "$NEW_VERSION" == "$OLD_VERSION" ]]; then
+  exit 0
+fi
 
-TAG="v$VERSION"
+TAG="v$NEW_VERSION"
+HEAD_SHA=$(git rev-parse HEAD)
 
 if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
-  echo "post-commit: tag $TAG already exists, skipping" >&2
+  EXISTING_SHA=$(git rev-list -n 1 "$TAG")
+  if [[ "$EXISTING_SHA" == "$HEAD_SHA" ]]; then
+    exit 0
+  fi
+  git tag -f "$TAG" HEAD
+  echo "post-commit: moved tag $TAG from $EXISTING_SHA to HEAD (likely amend)"
   exit 0
 fi
 

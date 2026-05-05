@@ -4,15 +4,83 @@
 # Consumed by per-repo caller workflows via `uses:`.
 #
 # Triggers (push/PR/schedule) live in the CALLER, not here. This file
-# only declares `workflow_call`. See caller template for the wire-up.
+# only declares `workflow_call`. See examples/security-review.yml for the
+# caller wire-up.
+#
+# Stack:
+#   SAST     — OpenGrep (LGPL fork of Semgrep CE; restores cross-function
+#              taint analysis Semgrep moved to Pro). Optional generic-mode
+#              job for languages not natively parsed.
+#   SCA      — OSV-Scanner (Google) via reusable workflow.
+#   FS/IaC   — Trivy (filesystem + IaC + container manifest scan).
+#   Secrets  — TruffleHog with verification: PR-diff mode on PRs,
+#              full-history mode on push/schedule.
+#
+# Findings exposure (matters for private repos):
+#   - SARIF is uploaded to the GitHub Code Scanning UI when available.
+#     This requires the repo to be public OR have GitHub Advanced Security
+#     (or the new "Code Security" SKU) enabled. Private repos without GHAS
+#     will see the upload step fail; we mark it `continue-on-error: true`
+#     so the workflow itself stays green.
+#   - SARIF is ALSO uploaded as a workflow artifact (always, regardless of
+#     repo type). Download from Actions → workflow run → Artifacts, or via
+#     `gh run download <run-id>`. VSCode's "SARIF Viewer" extension renders
+#     them nicely; the `sarif` CLI is another option.
+#
+# Supply chain hardening:
+#   - Runner OS pinned (ubuntu-26.04 not yet on GHA as of May 2026).
+#   - OpenGrep version pinned via input.
+#   - install.sh fetched from the IMMUTABLE git tag matching that version,
+#     not from `main`. install.sh internally verifies the binary's Cosign
+#     (Sigstore) signature before installing — stronger than a SHA256
+#     checksum, since it proves the binary was produced by OpenGrep's
+#     signed release workflow on GitHub.
+#   - Third-party action refs should be SHA-pinned via tools/pin-actions
+#     before merging. `--check` mode of that script is suitable for CI gating.
 
 name: Security (reusable)
 
 on:
   workflow_call:
     inputs:
-      semgrep-extra-rules:
-        description: "Space-separated extra Semgrep rule packs (e.g. 'p/python p/django')"
+      runner-os:
+        description: "GitHub-hosted runner image. Pin explicitly; do not use ubuntu-latest."
+        required: false
+        type: string
+        default: "ubuntu-24.04"
+      opengrep-version:
+        description: "OpenGrep release tag. The install script is also pinned to this tag."
+        required: false
+        type: string
+        default: "v1.16.0"
+      rules-ref:
+        description: >-
+          Git ref of semgrep/semgrep-rules to scan with. Defaults to `main`
+          for always-current rule coverage; pin to a SHA in callers that
+          need reproducibility.
+
+          NOTE on rules sourcing: opengrep/opengrep-rules was archived
+          2025-11-28 and is no longer maintained. We use semgrep-rules
+          directly — its license (Semgrep Rules License v1.0) carves out
+          an explicit exception for security consultants and individual
+          assessment use. We retain OpenGrep as the engine for its restored
+          taint analysis. For supplementary rule sources (Trail of Bits,
+          custom rules, etc.), use the `opengrep-extra-configs` input.
+        required: false
+        type: string
+        default: "main"
+      opengrep-extra-configs:
+        description: >-
+          Space-separated extra rule paths/files inside the consuming repo
+          (e.g. './security/rules' or './opengrep/cfml.yml').
+        required: false
+        type: string
+        default: ""
+      opengrep-generic-rules:
+        description: >-
+          Space-separated paths to custom YAML rules using OpenGrep's
+          generic mode (spacegrep). Use for languages OpenGrep doesn't
+          parse natively. Empty disables generic-mode scanning.
         required: false
         type: string
         default: ""
@@ -21,8 +89,8 @@ on:
         required: false
         type: string
         default: "CRITICAL,HIGH,MEDIUM"
-      enable-gitleaks:
-        description: "Run gitleaks history scan. Disable for org private repos without a license."
+      enable-trufflehog:
+        description: "Run TruffleHog secret verification scans."
         required: false
         type: boolean
         default: true
@@ -39,36 +107,114 @@ concurrency:
 
 jobs:
   # ---------- SAST ----------
-  semgrep:
-    name: Semgrep (SAST)
-    runs-on: ubuntu-latest
-    container:
-      image: semgrep/semgrep
+  opengrep:
+    name: OpenGrep (SAST)
+    runs-on: ${{ inputs.runner-os }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Run Semgrep
+      - uses: actions/checkout@v4.2.2
+
+      - name: Install OpenGrep (tag-pinned + Cosign-verified)
         env:
-          SEMGREP_RULES: >-
-            p/default
-            p/security-audit
-            p/secrets
-            p/owasp-top-ten
-            p/javascript
-            p/typescript
-            p/csharp
-            ${{ inputs.semgrep-extra-rules }}
-        run: semgrep scan --sarif --output=semgrep.sarif
+          OPENGREP_VERSION: ${{ inputs.opengrep-version }}
+        run: |
+          set -euo pipefail
+          # Fetch install.sh from the IMMUTABLE TAG matching the binary version.
+          # install.sh internally verifies the Cosign signature on the binary.
+          INSTALL_SH_URL="https://raw.githubusercontent.com/opengrep/opengrep/${OPENGREP_VERSION}/install.sh"
+          curl --fail --silent --show-error --location "$INSTALL_SH_URL" \
+            | bash -s -- --version "${OPENGREP_VERSION}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Confirm OpenGrep version
+        run: opengrep --version
+
+      - name: Fetch OpenGrep rules
+        env:
+          RULES_REF: ${{ inputs.rules-ref }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "${RULES_REF}" \
+            https://github.com/semgrep/semgrep-rules.git \
+            "$RUNNER_TEMP/semgrep-rules"
+
+      - name: Run OpenGrep
+        env:
+          EXTRA: ${{ inputs.opengrep-extra-configs }}
+        run: |
+          set -euo pipefail
+          configs="-f $RUNNER_TEMP/semgrep-rules"
+          for cfg in $EXTRA; do
+            configs="$configs -f $cfg"
+          done
+          # shellcheck disable=SC2086
+          opengrep scan $configs --sarif --output=opengrep.sarif
         continue-on-error: true
-      - uses: github/codeql-action/upload-sarif@v3
-        if: always()
+
+      - uses: github/codeql-action/upload-sarif@v3.27.0
+        if: always() && hashFiles('opengrep.sarif') != ''
+        continue-on-error: true  # private repos without GHAS will fail here; that's OK
         with:
-          sarif_file: semgrep.sarif
-          category: semgrep
+          sarif_file: opengrep.sarif
+          category: opengrep
+      - name: Archive SARIF as workflow artifact
+        uses: actions/upload-artifact@v4.6.2
+        if: always() && hashFiles('opengrep.sarif') != ''
+        with:
+          name: sarif-opengrep
+          path: opengrep.sarif
+          retention-days: 30
+          overwrite: true
+
+  # ---------- SAST (generic): for languages OpenGrep doesn't natively parse ----------
+  opengrep-generic:
+    name: OpenGrep (generic mode)
+    if: ${{ inputs.opengrep-generic-rules != '' }}
+    runs-on: ${{ inputs.runner-os }}
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Install OpenGrep (tag-pinned + Cosign-verified)
+        env:
+          OPENGREP_VERSION: ${{ inputs.opengrep-version }}
+        run: |
+          set -euo pipefail
+          INSTALL_SH_URL="https://raw.githubusercontent.com/opengrep/opengrep/${OPENGREP_VERSION}/install.sh"
+          curl --fail --silent --show-error --location "$INSTALL_SH_URL" \
+            | bash -s -- --version "${OPENGREP_VERSION}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Run OpenGrep generic-mode rules
+        env:
+          GENERIC: ${{ inputs.opengrep-generic-rules }}
+        run: |
+          set -euo pipefail
+          configs=""
+          for rule in $GENERIC; do
+            configs="$configs -f $rule"
+          done
+          # shellcheck disable=SC2086
+          opengrep scan $configs --sarif --output=opengrep-generic.sarif
+        continue-on-error: true
+
+      - uses: github/codeql-action/upload-sarif@v3.27.0
+        if: always() && hashFiles('opengrep-generic.sarif') != ''
+        continue-on-error: true  # private repos without GHAS will fail here; that's OK
+        with:
+          sarif_file: opengrep-generic.sarif
+          category: opengrep-generic
+      - name: Archive SARIF as workflow artifact
+        uses: actions/upload-artifact@v4.6.2
+        if: always() && hashFiles('opengrep-generic.sarif') != ''
+        with:
+          name: sarif-opengrep-generic
+          path: opengrep-generic.sarif
+          retention-days: 30
+          overwrite: true
 
   # ---------- SCA ----------
   osv-scanner:
     name: OSV-Scanner (SCA)
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v1.9.0
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v1.9.2
     permissions:
       contents: read
       security-events: write
@@ -77,11 +223,11 @@ jobs:
   # ---------- Filesystem / IaC / containers ----------
   trivy:
     name: Trivy (filesystem + IaC)
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner-os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
       - name: Run Trivy
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           scan-type: fs
           scanners: vuln,secret,misconfig
@@ -89,23 +235,206 @@ jobs:
           output: trivy.sarif
           severity: ${{ inputs.trivy-severity }}
           ignore-unfixed: true
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@v3.27.0
         if: always()
+        continue-on-error: true  # private repos without GHAS will fail here; that's OK
         with:
           sarif_file: trivy.sarif
           category: trivy
+      - name: Archive SARIF as workflow artifact
+        uses: actions/upload-artifact@v4.6.2
+        if: always() && hashFiles('trivy.sarif') != ''
+        with:
+          name: sarif-trivy
+          path: trivy.sarif
+          retention-days: 30
+          overwrite: true
 
-  # ---------- Secrets (history) ----------
-  gitleaks:
-    name: Gitleaks (git history secrets)
-    if: ${{ inputs.enable-gitleaks }}
-    runs-on: ubuntu-latest
+  # ---------- Secrets: PR-diff mode (fast, every PR, broader detector net) ----------
+  trufflehog-diff:
+    name: TruffleHog (PR diff)
+    if: ${{ inputs.enable-trufflehog && github.event_name == 'pull_request' }}
+    runs-on: ${{ inputs.runner-os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - name: TruffleHog scan (diff)
+        uses: trufflesecurity/trufflehog@v3.82.13
+        with:
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+          extra_args: --results=verified,unknown --sarif --output=trufflehog.sarif
+        continue-on-error: true
+      - uses: github/codeql-action/upload-sarif@v3.27.0
+        if: always() && hashFiles('trufflehog.sarif') != ''
+        continue-on-error: true  # private repos without GHAS will fail here; that's OK
+        with:
+          sarif_file: trufflehog.sarif
+          category: trufflehog-diff
+      - name: Archive SARIF as workflow artifact
+        uses: actions/upload-artifact@v4.6.2
+        if: always() && hashFiles('trufflehog.sarif') != ''
+        with:
+          name: sarif-trufflehog-diff
+          path: trufflehog.sarif
+          retention-days: 30
+          overwrite: true
+
+  # ---------- Secrets: full-history mode (push/schedule, verified-only signal) ----------
+  trufflehog-history:
+    name: TruffleHog (full history)
+    if: ${{ inputs.enable-trufflehog && github.event_name != 'pull_request' }}
+    runs-on: ${{ inputs.runner-os }}
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+      - name: TruffleHog scan (history)
+        uses: trufflesecurity/trufflehog@v3.82.13
+        with:
+          extra_args: --results=verified --sarif --output=trufflehog.sarif
+        continue-on-error: true
+      - uses: github/codeql-action/upload-sarif@v3.27.0
+        if: always() && hashFiles('trufflehog.sarif') != ''
+        continue-on-error: true  # private repos without GHAS will fail here; that's OK
+        with:
+          sarif_file: trufflehog.sarif
+          category: trufflehog-history
+      - name: Archive SARIF as workflow artifact
+        uses: actions/upload-artifact@v4.6.2
+        if: always() && hashFiles('trufflehog.sarif') != ''
+        with:
+          name: sarif-trufflehog-history
+          path: trufflehog.sarif
+          retention-days: 30
+          overwrite: true
+
+  # ---------- Findings summary (renders on workflow run page) ----------
+  # Aggregates all SARIF artifacts into a markdown table written to
+  # $GITHUB_STEP_SUMMARY, which displays directly on the workflow run page.
+  # Critical for private repos without GHAS where the Code Scanning UI is
+  # unavailable — gives at-a-glance findings visibility without needing to
+  # download artifacts.
+  summary:
+    name: Findings summary
+    if: always()
+    needs: [opengrep, opengrep-generic, trivy, trufflehog-diff, trufflehog-history]
+    runs-on: ${{ inputs.runner-os }}
+    steps:
+      - name: Download all SARIF artifacts
+        uses: actions/download-artifact@v4.3.0
+        with:
+          pattern: sarif-*
+          path: sarifs
+        continue-on-error: true  # tolerate scanners that didn't run / produced no SARIF
+
+      - name: Render markdown summary
+        if: always()
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # GITLEAKS_LICENSE only required for GitHub *Organization* private repos.
-          # GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - <<'PYEOF' >> "$GITHUB_STEP_SUMMARY"
+          import json, os, pathlib
+
+          # artifact directory name -> human-readable scanner name
+          SCANNERS = [
+              ("sarif-opengrep",            "OpenGrep (SAST)"),
+              ("sarif-opengrep-generic",    "OpenGrep (generic mode)"),
+              ("sarif-trivy",               "Trivy (filesystem + IaC)"),
+              ("sarif-trufflehog-diff",     "TruffleHog (PR diff)"),
+              ("sarif-trufflehog-history",  "TruffleHog (full history)"),
+          ]
+          SEV_EMOJI = {"error": "🔴", "warning": "🟡", "note": "🔵", "none": "⚪"}
+          MAX_DETAIL_ROWS = 25
+
+          def parse_sarif(path):
+              try:
+                  data = json.loads(path.read_text())
+              except Exception as e:
+                  return None, f"(failed to parse: {e})"
+              findings = []
+              for run in data.get("runs", []):
+                  for r in run.get("results", []):
+                      sev = r.get("level", "warning")
+                      rule = r.get("ruleId", "")
+                      msg = (r.get("message", {}).get("text") or "").strip().splitlines()[0][:140]
+                      locs = r.get("locations", [])
+                      file_, line = "", ""
+                      if locs:
+                          phys = locs[0].get("physicalLocation", {})
+                          file_ = phys.get("artifactLocation", {}).get("uri", "")
+                          line = phys.get("region", {}).get("startLine", "")
+                      findings.append({"sev": sev, "rule": rule, "msg": msg, "file": file_, "line": line})
+              return findings, None
+
+          # Collect findings per scanner
+          results = {}
+          for art_dir, name in SCANNERS:
+              dir_path = pathlib.Path("sarifs") / art_dir
+              if not dir_path.is_dir():
+                  results[name] = ("skipped", None)
+                  continue
+              sarif_files = list(dir_path.glob("*.sarif"))
+              if not sarif_files:
+                  results[name] = ("no_output", None)
+                  continue
+              findings, err = parse_sarif(sarif_files[0])
+              if err:
+                  results[name] = ("error", err)
+              else:
+                  results[name] = ("ok", findings)
+
+          # Header
+          print("# 🔒 Security scan summary")
+          print()
+
+          total = sum(len(f) for status, f in results.values() if status == "ok" and f)
+          print(f"**Total findings across all scanners: {total}**")
+          print()
+
+          # Overview table
+          print("| Scanner | Findings | Status |")
+          print("|---|---:|---|")
+          for _, name in SCANNERS:
+              status, payload = results[name]
+              if status == "skipped":
+                  print(f"| {name} | — | _not run_ |")
+              elif status == "no_output":
+                  print(f"| {name} | — | _no SARIF produced_ |")
+              elif status == "error":
+                  print(f"| {name} | — | _{payload}_ |")
+              else:
+                  count = len(payload)
+                  emoji = "✅" if count == 0 else "⚠️"
+                  print(f"| {name} | {count} | {emoji} |")
+          print()
+
+          # Per-scanner detail tables
+          for _, name in SCANNERS:
+              status, findings = results[name]
+              if status != "ok" or not findings:
+                  continue
+              print(f"## {name}")
+              print()
+              print("| Sev | Location | Rule | Message |")
+              print("|---|---|---|---|")
+              for f in findings[:MAX_DETAIL_ROWS]:
+                  emoji = SEV_EMOJI.get(f["sev"], "⚪")
+                  loc = f"`{f['file']}:{f['line']}`" if f["file"] else "_(no location)_"
+                  rule = f"`{f['rule']}`" if f["rule"] else ""
+                  msg = f["msg"].replace("|", "\\|")
+                  print(f"| {emoji} {f['sev']} | {loc} | {rule} | {msg} |")
+              if len(findings) > MAX_DETAIL_ROWS:
+                  print()
+                  print(f"_…and {len(findings) - MAX_DETAIL_ROWS} more. Download the `{[d for d, n in SCANNERS if n == name][0]}` artifact from the [run page](" + os.environ.get("RUN_URL", "") + ") for full details._")
+              print()
+
+          # Footer
+          print("---")
+          print()
+          print(f"**View artifacts:** [{os.environ.get('RUN_URL', 'workflow run')}]({os.environ.get('RUN_URL', '')})  ")
+          print("**Tip:** Open SARIF files locally with VSCode's [SARIF Viewer](https://marketplace.visualstudio.com/items?itemName=MS-SarifVSCode.sarif-viewer) extension.")
+          PYEOF
+
