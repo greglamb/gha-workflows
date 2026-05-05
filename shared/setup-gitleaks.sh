@@ -245,9 +245,19 @@ title = "Gitleaks config"
 [extend]
 useDefault = true
 
-# Allowlist entries — uncomment and adapt as needed. Each [[allowlists]]
-# entry must include at least one non-empty check (commits, paths,
-# regexes, or stopwords) or gitleaks will refuse to load the config.
+# Path-based allowlist for common dependency / build directories.
+# Findings inside these paths are almost always noise (third-party code,
+# vendored deps, lockfile hashes mistaken for credentials, etc.). Add
+# more paths here as you discover them in your repo.
+[[allowlists]]
+  description = "Dependency and build directories"
+  paths = [
+    '^node_modules/',
+  ]
+
+# Add more allowlist entries below as needed. Each [[allowlists]] entry
+# must include at least one non-empty check (commits, paths, regexes, or
+# stopwords) or gitleaks will refuse to load the config.
 #
 # [[allowlists]]
 #   description = "Skip vendored test fixtures"
@@ -256,22 +266,51 @@ useDefault = true
 # [[allowlists]]
 #   description = "Known false positives in this repo"
 #   regexes = ['EXAMPLE_API_KEY_NOT_REAL']
+#
+# [[allowlists]]
+#   description = "Pre-cleanup history audited and accepted"
+#   commits = ['abc123def456']
 TOML
 }
 
 # ---- 5. initial scan against the working tree ----
 gl::initial_scan() {
-  gl::info "running gitleaks against the working tree"
-  if gitleaks dir . --no-banner --redact; then
+  # Report path lives under .git/ so it never accidentally gets committed.
+  # Unredacted on purpose: the user needs the actual matched content to
+  # triage false positives. The console output is still safe — gitleaks
+  # v8.30 prints only the summary by default (no per-finding detail unless
+  # --verbose is passed).
+  local report=".git/gitleaks-report.json"
+  gl::info "running gitleaks against the working tree (report -> $report)"
+
+  if gitleaks dir . --no-banner --report-format json --report-path "$report"; then
     gl::info "no secrets found"
+    rm -f "$report"
     return 0
   fi
-  gl::error "gitleaks reported potential secrets above."
-  gl::error "this script will NOT auto-remove or rewrite history."
-  gl::error "review findings, rotate any leaked credentials, and either:"
-  gl::error "  - clean the repo (e.g. git filter-repo / BFG), or"
-  gl::error "  - add justified false-positives to the allowlist in .gitleaks.toml"
-  gl::error "stopping before commit."
+
+  local count=""
+  if command -v jq >/dev/null 2>&1 && [ -f "$report" ]; then
+    count=$(jq 'length' "$report" 2>/dev/null || true)
+  fi
+
+  gl::error "gitleaks reported${count:+ $count} potential finding(s)."
+  gl::error "Full unredacted report: $report"
+  gl::error ""
+  gl::error "Inspect findings:"
+  gl::error "  jq -r '.[] | \"\\(.File):\\(.StartLine)  \\(.Description)  \\(.Match)\"' $report | less"
+  gl::error ""
+  gl::error "If they are false positives, allowlist them in .gitleaks.toml:"
+  gl::error "  [[allowlists]]"
+  gl::error "    description = \"…\""
+  gl::error "    paths   = [ '^tests/fixtures/' ]      # OR"
+  gl::error "    regexes = [ 'KNOWN_DUMMY_VALUE' ]     # OR"
+  gl::error "    stopwords = [ 'example', 'fake' ]     # OR"
+  gl::error "    commits = [ 'abc123…' ]"
+  gl::error "  (each entry needs at least one of those four)"
+  gl::error ""
+  gl::error "If they are real secrets: rotate them and clean history"
+  gl::error "(git filter-repo / BFG), then re-run this script to confirm."
   exit 1
 }
 
