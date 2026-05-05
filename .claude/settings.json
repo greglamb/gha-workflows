@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "claude-gcode-tools": {
+      "source": {
+        "source": "github",
+        "repo": "greglamb/claude-gcode-tools"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "bash-project@claude-gcode-tools": true
+  }
+}
