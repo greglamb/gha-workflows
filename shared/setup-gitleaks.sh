@@ -42,7 +42,7 @@ Install gitleaks as a pre-commit hook in the current git repo.
 
 Options:
   --no-commit                Don't auto-commit .gitleaks.toml and the hook
-  --no-scan                  Skip the initial gitleaks scan of the working tree
+  --no-scan                  Skip the initial gitleaks scan of git history
   --force                    Overwrite .gitleaks.toml if it exists
   --gitleaks-version <ver>   Pin the gitleaks binary version
                                (default: ${GITLEAKS_VERSION})
@@ -56,7 +56,9 @@ Behavior:
   - Splices a marker-bounded gitleaks block into .githooks/pre-commit,
     leaving any existing hook content alone.
   - Creates .gitleaks.toml if missing (use --force to overwrite).
-  - Runs an initial scan; aborts before committing if it finds anything.
+  - Runs an initial scan against git history (gitleaks git, not dir);
+    gitignored paths are out of scope automatically. Aborts before
+    committing if it finds anything.
   - Auto-commits the two config files only if the index is otherwise
     clean (so unrelated staged work is never bundled in).
 EOF
@@ -245,23 +247,23 @@ title = "Gitleaks config"
 [extend]
 useDefault = true
 
-# Path-based allowlist for common dependency / build directories.
-# Findings inside these paths are almost always noise (third-party code,
-# vendored deps, lockfile hashes mistaken for credentials, etc.). Add
-# more paths here as you discover them in your repo.
-[[allowlists]]
-  description = "Dependency and build directories"
-  paths = [
-    '^node_modules/',
-  ]
-
-# Add more allowlist entries below as needed. Each [[allowlists]] entry
-# must include at least one non-empty check (commits, paths, regexes, or
-# stopwords) or gitleaks will refuse to load the config.
+# This script scans `gitleaks git` (history) rather than `gitleaks dir`
+# (filesystem walk), so anything in .gitignore is automatically skipped —
+# you don't need to add node_modules/, dist/, .venv/, etc. here.
+#
+# Add allowlist entries for things that ARE in git history but should be
+# ignored: committed test fixtures, lockfile hashes that trip generic
+# rules, audited historical commits, etc. Each [[allowlists]] entry
+# must include at least one non-empty check (commits, paths, regexes,
+# or stopwords) or gitleaks will refuse to load the config.
 #
 # [[allowlists]]
-#   description = "Skip vendored test fixtures"
+#   description = "Skip committed test fixtures"
 #   paths = ['^tests/fixtures/']
+#
+# [[allowlists]]
+#   description = "Lockfile hashes that look like API keys"
+#   paths = ['(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$']
 #
 # [[allowlists]]
 #   description = "Known false positives in this repo"
@@ -273,18 +275,32 @@ useDefault = true
 TOML
 }
 
-# ---- 5. initial scan against the working tree ----
+# ---- 5. initial scan against git history ----
 gl::initial_scan() {
+  # `gitleaks git` scans the commit log, not the filesystem. This means
+  # anything in .gitignore (node_modules/, dist/, .venv/, build outputs,
+  # etc.) is automatically out of scope — we don't have to maintain a
+  # path-based allowlist of common noise. Tradeoff: secrets sitting in
+  # the working tree but never committed aren't caught here; the
+  # per-commit hook (gitleaks git --pre-commit --staged) catches them
+  # at the moment they would be committed.
+  #
   # Report path lives under .git/ so it never accidentally gets committed.
   # Unredacted on purpose: the user needs the actual matched content to
-  # triage false positives. The console output is still safe — gitleaks
-  # v8.30 prints only the summary by default (no per-finding detail unless
+  # triage false positives. The console output is safe — gitleaks v8.30
+  # prints only the summary by default (no per-finding detail unless
   # --verbose is passed).
   local report=".git/gitleaks-report.json"
-  gl::info "running gitleaks against the working tree (report -> $report)"
 
-  if gitleaks dir . --no-banner --report-format json --report-path "$report"; then
-    gl::info "no secrets found"
+  if ! git rev-parse HEAD >/dev/null 2>&1; then
+    gl::info "no commits yet — skipping history scan (per-commit hook will catch new secrets)"
+    return 0
+  fi
+
+  gl::info "running gitleaks against git history (report -> $report)"
+
+  if gitleaks git . --no-banner --report-format json --report-path "$report"; then
+    gl::info "no secrets found in git history"
     rm -f "$report"
     return 0
   fi
@@ -294,11 +310,11 @@ gl::initial_scan() {
     count=$(jq 'length' "$report" 2>/dev/null || true)
   fi
 
-  gl::error "gitleaks reported${count:+ $count} potential finding(s)."
+  gl::error "gitleaks reported${count:+ $count} potential finding(s) in git history."
   gl::error "Full unredacted report: $report"
   gl::error ""
-  gl::error "Inspect findings:"
-  gl::error "  jq -r '.[] | \"\\(.File):\\(.StartLine)  \\(.Description)  \\(.Match)\"' $report | less"
+  gl::error "Inspect findings (commit / file:line / rule / match):"
+  gl::error "  jq -r '.[] | \"\\(.Commit[0:8]) \\(.File):\\(.StartLine)  \\(.Description)  \\(.Match)\"' $report | less"
   gl::error ""
   gl::error "If they are false positives, allowlist them in .gitleaks.toml:"
   gl::error "  [[allowlists]]"
