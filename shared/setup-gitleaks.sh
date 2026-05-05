@@ -113,7 +113,15 @@ gl::ensure_hookspath() {
   elif [ "$current" = ".githooks" ]; then
     gl::info "core.hooksPath already = .githooks"
   else
-    gl::die "core.hooksPath is set to '$current' (expected '.githooks' or unset). Refusing to override — adjust manually if intentional."
+    gl::error "core.hooksPath is set to '$current' (expected '.githooks' or unset)."
+    gl::error "Refusing to override — hooks under '$current' would silently deactivate."
+    gl::error ""
+    gl::error "To proceed, choose one and re-run this script:"
+    gl::error "  - unset (this script will then set it to .githooks):"
+    gl::error "      git config --unset core.hooksPath"
+    gl::error "  - or override and migrate any hooks from '$current' to .githooks:"
+    gl::error "      git config core.hooksPath .githooks"
+    exit 1
   fi
 
   mkdir -p .githooks
