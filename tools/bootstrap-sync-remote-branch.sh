@@ -123,7 +123,7 @@ generate_caller_workflow() {
         description: \"Base branch for auto-created PR\"
         required: false
         default: \"${PR_BASE}\""
-    pr_with=$'\n'"      create_pr: \${{ inputs.create_pr == '' && true || inputs.create_pr }}
+    pr_with=$'\n'"      create_pr: \${{ github.event_name != 'workflow_dispatch' || inputs.create_pr }}
       pr_base: \${{ inputs.pr_base || '${PR_BASE}' }}"
   fi
 
