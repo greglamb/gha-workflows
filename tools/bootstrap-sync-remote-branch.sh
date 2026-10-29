@@ -14,6 +14,8 @@ DISABLE_WORKFLOWS="rename"
 RENAME_DIR=".github/workflows-upstream"
 AUTO_PR=false
 PR_BASE="main"
+SYNC_TAGS=false
+TAG_PREFIX=""
 NO_REMOTE=false
 NO_WORKFLOW=false
 DRY_RUN=false
@@ -50,6 +52,8 @@ Options:
   --caller-ref <ref>                   Workflow repo ref (default: latest release via gh)
   --auto-pr                            Auto-create PR after sync (default: off)
   --pr-base <branch>                   PR target branch (default: main)
+  --sync-tags                          Also mirror upstream tags (default: off)
+  --tag-prefix <prefix>                Prefix for mirrored tags, e.g. upstream/org/ (implies --sync-tags)
   --dry-run                            Preview output without writing files
   --update                             Re-download reusable workflow only (inline mode)
   --force                              Overwrite existing files
@@ -77,6 +81,7 @@ Examples:
   ${self} https://github.com/org/repo.git -m caller -c "0 6 * * 1"
   ${self} https://github.com/org/repo.git --auto-pr --pr-base develop
   ${self} https://github.com/org/repo.git -d delete
+  ${self} https://github.com/org/repo.git --tag-prefix upstream/org/
   ${self} https://github.com/org/repo.git --dry-run
   ${self} https://github.com/org/repo.git --update --force
   ${self} https://github.com/org/repo.git --workflows-repo myorg/wf --caller-ref main
@@ -109,6 +114,8 @@ generate_caller_workflow() {
   local uses_path="$1"  # remote or local path
   local pr_inputs=""
   local pr_with=""
+  local tag_inputs=""
+  local tag_with=""
   local schedule_block=""
 
   if [[ "$AUTO_PR" == true ]]; then
@@ -125,6 +132,20 @@ generate_caller_workflow() {
         default: \"${PR_BASE}\""
     pr_with=$'\n'"      create_pr: \${{ github.event_name != 'workflow_dispatch' || inputs.create_pr }}
       pr_base: \${{ inputs.pr_base || '${PR_BASE}' }}"
+  fi
+
+  if [[ "$SYNC_TAGS" == true ]]; then
+    tag_inputs=$'\n'"      sync_tags:
+        description: \"Also mirror the source repo's tags\"
+        required: false
+        type: boolean
+        default: true
+      tag_prefix:
+        description: \"Prefix for mirrored tag names\"
+        required: false
+        default: \"${TAG_PREFIX}\""
+    tag_with=$'\n'"      sync_tags: \${{ github.event_name != 'workflow_dispatch' || inputs.sync_tags }}
+      tag_prefix: \${{ inputs.tag_prefix || '${TAG_PREFIX}' }}"
   fi
 
   if [[ -n "$CRON" ]]; then
@@ -162,7 +183,7 @@ on:
       rename_dir:
         description: "Destination directory for renamed workflows (rename mode only)"
         required: false
-        default: "${RENAME_DIR}"${pr_inputs}${schedule_block}
+        default: "${RENAME_DIR}"${pr_inputs}${tag_inputs}${schedule_block}
 
 permissions:
   contents: write
@@ -176,7 +197,7 @@ jobs:
       source_ref: \${{ inputs.source_ref || '${BRANCH}' }}
       target_ref: \${{ inputs.target_ref || '${SYNC_BRANCH}' }}
       disable_workflows: \${{ inputs.disable_workflows || '${DISABLE_WORKFLOWS}' }}
-      rename_dir: \${{ inputs.rename_dir || '${RENAME_DIR}' }}${pr_with}
+      rename_dir: \${{ inputs.rename_dir || '${RENAME_DIR}' }}${pr_with}${tag_with}
 YAML
 }
 
@@ -238,6 +259,8 @@ while [[ $# -gt 0 ]]; do
     --rename-dir)             RENAME_DIR="$2"; _SET_RENAME_DIR=true; shift 2 ;;
     --auto-pr)                AUTO_PR=true; _SET_AUTO_PR=true; shift ;;
     --pr-base)                PR_BASE="$2"; _SET_PR_BASE=true; shift 2 ;;
+    --sync-tags)              SYNC_TAGS=true; shift ;;
+    --tag-prefix)             TAG_PREFIX="$2"; SYNC_TAGS=true; shift 2 ;;
     --no-remote)              NO_REMOTE=true; shift ;;
     --no-workflow)            NO_WORKFLOW=true; shift ;;
     --dry-run)                DRY_RUN=true; shift ;;
@@ -267,6 +290,11 @@ fi
 
 if [[ "$DISABLE_WORKFLOWS" != "rename" && "$DISABLE_WORKFLOWS" != "delete" && "$DISABLE_WORKFLOWS" != "keep" ]]; then
   echo "Error: --disable-workflows must be 'rename', 'delete', or 'keep'." >&2
+  exit 1
+fi
+
+if [[ -n "$TAG_PREFIX" ]] && ! git check-ref-format "refs/tags/${TAG_PREFIX}x"; then
+  echo "Error: --tag-prefix '$TAG_PREFIX' does not make a valid tag name." >&2
   exit 1
 fi
 
@@ -379,6 +407,11 @@ if [[ "$AUTO_PR" == true ]]; then
   echo "  Auto PR:         $SYNC_BRANCH → $PR_BASE$(_d "$_SET_PR_BASE")"
 else
   echo "  Auto PR:         off$(_d "$_SET_AUTO_PR")"
+fi
+if [[ "$SYNC_TAGS" == true ]]; then
+  echo "  Tags:            mirrored$( [[ -n "$TAG_PREFIX" ]] && echo " under $TAG_PREFIX" || echo " as-is" )"
+else
+  echo "  Tags:            off (default)"
 fi
 echo ""
 echo "  Run manually: gh workflow run sync-upstream.yml"

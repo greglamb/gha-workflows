@@ -93,7 +93,8 @@ Mirrors a branch from an external repo into a target branch in this repo. Useful
 1. Fetches the source ref from the remote repository
 2. Force-pushes it to a target branch in your repo
 3. Optionally renames, deletes, or keeps any `.github/workflows/*.yml` files from upstream
-4. Optionally opens (or updates) a PR from the sync branch
+4. Optionally mirrors the source repo's tags, under a name prefix if you give one
+5. Optionally opens (or updates) a PR from the sync branch
 
 #### Inputs
 
@@ -106,6 +107,8 @@ Mirrors a branch from an external repo into a target branch in this repo. Useful
 | `rename_dir` | string | no | `.github/workflows-upstream` | Where to move renamed workflows |
 | `create_pr` | boolean | no | `false` | Auto-create a PR after syncing |
 | `pr_base` | string | no | `main` | Base branch for the auto-created PR |
+| `sync_tags` | boolean | no | `false` | Also mirror the source repo's tags |
+| `tag_prefix` | string | no | `""` | Prefix for mirrored tag names, e.g. `upstream/org/` turns `7.2.0` into `upstream/org/7.2.0` |
 
 #### Permissions
 
@@ -145,6 +148,17 @@ A ready-to-copy version lives at [`examples/sync-upstream.yml`](examples/sync-up
 - **`rename`** (default) — Moves upstream workflow files to `.github/workflows-upstream/` (or custom `rename_dir`) so they don't execute but remain available for reference.
 - **`delete`** — Removes all upstream workflow files from the mirrored branch.
 - **`keep`** — Leaves workflow files untouched. Use with caution — upstream workflows will run in your repo.
+
+#### Tags
+
+With `sync_tags: true`, every tag in the source repo is mirrored after the branch push. A `tag_prefix` keeps them apart from your own tags and makes them easy to exclude (`tags-ignore: ['upstream/**']`). Tags are never force-updated: if a source tag moves, or a tag of the same name already points elsewhere, the run fails and leaves the existing tag alone. Delete the old tag to accept the new one.
+
+Mirrored tags don't start your workflows:
+
+- The push uses `GITHUB_TOKEN`, and pushes made with it start no workflow runs.
+- For a push event, GitHub reads the workflow files from the pushed commit. A mirrored tag points at a source commit, which holds only the source repo's own workflows (unrenamed, since the rename commit exists only on the sync branch), never yours. Check that those have no `push` trigger before you push tags with any other token.
+
+Services outside Actions that receive webhooks, such as Xcode Cloud, still see the tag pushes; limit their start conditions to your own branches.
 
 ## Bootstrap tools
 
@@ -189,7 +203,7 @@ Sets up upstream-mirror tracking for a private fork or vendored upstream:
   --cron "0 6 * * 1"
 ```
 
-Useful flags: `--mode inline|caller`, `--branch`, `--sync-branch`, `--cron`, `--remote-name`, `--disable-workflows`, `--rename-dir`, `--workflows-repo`, `--caller-ref`, `--auto-pr`, `--pr-base`, `--dry-run`, `--update`, `--force`, `--no-remote`, `--no-workflow`.
+Useful flags: `--mode inline|caller`, `--branch`, `--sync-branch`, `--cron`, `--remote-name`, `--disable-workflows`, `--rename-dir`, `--workflows-repo`, `--caller-ref`, `--auto-pr`, `--pr-base`, `--sync-tags`, `--tag-prefix`, `--dry-run`, `--update`, `--force`, `--no-remote`, `--no-workflow`.
 
 ## Versioning
 

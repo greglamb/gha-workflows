@@ -47,6 +47,16 @@ on:
         required: false
         type: string
         default: "main"
+      sync_tags:
+        description: "Also mirror the source repo's tags (never force-updated)"
+        required: false
+        type: boolean
+        default: false
+      tag_prefix:
+        description: "Prefix for mirrored tag names, e.g. 'upstream/org/' (sync_tags must be true)"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -130,6 +140,25 @@ jobs:
         run: |
           set -euo pipefail
           git push origin "$TARGET_REF" --force
+
+      - name: Mirror tags
+        if: ${{ inputs.sync_tags }}
+        shell: bash
+        env:
+          TAG_PREFIX: ${{ inputs.tag_prefix }}
+        run: |
+          set -euo pipefail
+          if ! git check-ref-format "refs/tags/${TAG_PREFIX}x"; then
+            echo "::error::tag_prefix '$TAG_PREFIX' does not make a valid tag name."
+            exit 1
+          fi
+
+          # No '+' in either refspec: a tag that moved upstream fails the run instead of being overwritten.
+          if ! git fetch --no-tags "$SOURCE_REMOTE" "refs/tags/*:refs/tags/${TAG_PREFIX}*"; then
+            echo "::error::A source tag no longer matches the tag under '${TAG_PREFIX}' here. Review it, then delete the old tag to accept the new one."
+            exit 1
+          fi
+          git push origin "refs/tags/${TAG_PREFIX}*:refs/tags/${TAG_PREFIX}*"
 
       - name: Create or update PR
         if: ${{ inputs.create_pr }}
