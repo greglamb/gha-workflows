@@ -38,7 +38,9 @@ Usage: ${self} <upstream-url> [options]
 
 Syncs a public upstream repo into a dedicated branch in your private repo.
 Adds a git remote and generates a GitHub Actions workflow. PR from the
-sync branch into main to review changes on your terms.
+sync branch into main to review changes on your terms. Also pins gh's
+default repo to origin, since gh would otherwise prefer a remote named
+"upstream" and open PRs there.
 
 Options:
   -m, --mode <inline|caller>           Workflow strategy (default: caller)
@@ -246,6 +248,30 @@ download_reusable_workflow() {
   echo "✓ Downloaded $(basename "$dest") → $dest"
 }
 
+# gh prefers a remote named "upstream" (then "github") over "origin", so once the source repo is a remote, a bare
+# `gh pr create` in this clone would target it. Pin gh's default repo to origin unless one is already chosen.
+pin_gh_default_repo() {
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "ℹ  gh not installed — run 'gh repo set-default' for origin before using gh here."
+    return 0
+  fi
+  if git config --get-regexp '^remote\..*\.gh-resolved$' >/dev/null 2>&1; then
+    echo "⏭  gh default repo already set — skipping."
+    return 0
+  fi
+  local url slug
+  if ! url=$(git remote get-url origin 2>/dev/null); then
+    echo "⚠  No origin remote — gh's default repo not set." >&2
+    return 0
+  fi
+  slug=$(printf '%s\n' "$url" | sed -E 's#\.git$##; s#^.*[:/]([^/:]+/[^/:]+)$#\1#')
+  if gh repo set-default "$slug" >/dev/null 2>&1; then
+    echo "✓ gh default repo set to $slug, so gh commands here don't target \"$REMOTE_NAME\""
+  else
+    echo "⚠  Could not set gh's default repo. Run: gh repo set-default $slug" >&2
+  fi
+}
+
 # --- Main ---
 
 # Parse args
@@ -335,8 +361,10 @@ if [[ "$NO_REMOTE" == false && "$DRY_RUN" == false ]]; then
     git remote add "$REMOTE_NAME" "$UPSTREAM_URL"
     echo "✓ Added remote \"$REMOTE_NAME\" → $UPSTREAM_URL"
   fi
+  pin_gh_default_repo
 elif [[ "$NO_REMOTE" == false && "$DRY_RUN" == true ]]; then
   echo "# [dry-run] Would add remote \"$REMOTE_NAME\" → $UPSTREAM_URL"
+  echo "# [dry-run] Would pin gh's default repo to origin (gh repo set-default), unless one is set"
 fi
 
 # --update: only re-download the reusable workflow

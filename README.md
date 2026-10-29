@@ -192,6 +192,7 @@ Useful flags: `--mode inline|caller`, `--workflow-repo`, `--workflow-ref`, `--no
 Sets up upstream-mirror tracking for a private fork or vendored upstream:
 
 - Adds a git remote pointing at the upstream URL
+- Pins `gh`'s default repo to `origin` (`gh repo set-default`), unless one is set: `gh` otherwise prefers a remote named `upstream`, so a bare `gh pr create` would target the source repo
 - Generates a caller workflow at `.github/workflows/sync-upstream.yml`
 - In `inline` mode, also downloads `lib-sync-remote-branch.yml` into the consumer's repo
 
