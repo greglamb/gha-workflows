@@ -222,8 +222,10 @@ jobs:
           ---
           _This PR was auto-created by the upstream sync workflow._"
 
+          # --repo everywhere: without it gh prefers the remote named "upstream", the source repo.
           # Check for existing open PR from this branch
           EXISTING_PR=$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
             --head "$TARGET_REF" \
             --base "$PR_BASE" \
             --state open \
@@ -234,6 +236,7 @@ jobs:
             echo "✓ Existing PR #$EXISTING_PR updated (force-push updated the branch)."
           else
             gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
               --title "$PR_TITLE" \
               --body "$PR_BODY" \
               --head "$TARGET_REF" \
