@@ -61,3 +61,5 @@ jobs:
       # pr_base: "main"
       # sync_tags: true
       # tag_prefix: "upstream/org/"
+    # secrets:
+    #   tag_token: ${{ secrets.SYNC_TAG_TOKEN }}   # needed with sync_tags; see README

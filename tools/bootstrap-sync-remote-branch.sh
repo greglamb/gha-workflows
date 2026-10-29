@@ -145,7 +145,10 @@ generate_caller_workflow() {
         required: false
         default: \"${TAG_PREFIX}\""
     tag_with=$'\n'"      sync_tags: \${{ github.event_name != 'workflow_dispatch' || inputs.sync_tags }}
-      tag_prefix: \${{ inputs.tag_prefix || '${TAG_PREFIX}' }}"
+      tag_prefix: \${{ inputs.tag_prefix || '${TAG_PREFIX}' }}
+    # Fine-grained token (this repo, Contents + Workflows write); without it GitHub refuses tags holding workflows.
+    secrets:
+      tag_token: \${{ secrets.SYNC_TAG_TOKEN }}"
   fi
 
   if [[ -n "$CRON" ]]; then

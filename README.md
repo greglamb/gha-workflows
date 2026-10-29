@@ -110,6 +110,10 @@ Mirrors a branch from an external repo into a target branch in this repo. Useful
 | `sync_tags` | boolean | no | `false` | Also mirror the source repo's tags |
 | `tag_prefix` | string | no | `""` | Prefix for mirrored tag names, e.g. `upstream/org/` turns `7.2.0` into `upstream/org/7.2.0` |
 
+| Secret | Required | Description |
+|---|---|---|
+| `tag_token` | no | Token for the tag push; see [Tags](#tags) |
+
 #### Permissions
 
 ```yaml
@@ -151,14 +155,11 @@ A ready-to-copy version lives at [`examples/sync-upstream.yml`](examples/sync-up
 
 #### Tags
 
-With `sync_tags: true`, every tag in the source repo is mirrored after the branch push. A `tag_prefix` keeps them apart from your own tags and makes them easy to exclude (`tags-ignore: ['upstream/**']`). Tags are never force-updated: if a source tag moves, or a tag of the same name already points elsewhere, the run fails and leaves the existing tag alone. Delete the old tag to accept the new one.
+With `sync_tags: true`, every new tag in the source repo is mirrored after the branch push. A `tag_prefix` keeps them apart from your own tags and makes them easy to exclude (`tags-ignore: ['upstream/**']`). Tags are never force-updated: if a source tag moves, or a tag of the same name already points elsewhere, the run fails and leaves the existing tag alone. Delete the old tag to accept the new one.
 
-Mirrored tags don't start your workflows:
+**Token.** GitHub refuses a `GITHUB_TOKEN` push of any tag whose commit holds workflow files your default branch doesn't have, which is every source tag once `disable_workflows` has moved the source's workflows aside. Pass a `tag_token` secret: a fine-grained token for this repo only, with Contents and Workflows read and write. Only the tag push uses it.
 
-- The push uses `GITHUB_TOKEN`, and pushes made with it start no workflow runs.
-- For a push event, GitHub reads the workflow files from the pushed commit. A mirrored tag points at a source commit, which holds only the source repo's own workflows (unrenamed, since the rename commit exists only on the sync branch), never yours. Check that those have no `push` trigger before you push tags with any other token.
-
-Services outside Actions that receive webhooks, such as Xcode Cloud, still see the tag pushes; limit their start conditions to your own branches.
+**Triggers.** A tag push starts workflows from the tagged commit, which holds the source repo's workflows (unrenamed, since the rename commit exists only on the sync branch), never yours. A `GITHUB_TOKEN` push starts none, but a `tag_token` push would, so the step first skips, with a warning, every tag whose commit has a workflow that may start on `push` or `create`. Your own workflows can't run for these tags at all. Services outside Actions that receive webhooks, such as Xcode Cloud, still see the tag pushes; limit their start conditions to your own branches.
 
 ## Bootstrap tools
 

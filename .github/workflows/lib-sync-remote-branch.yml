@@ -57,6 +57,10 @@ on:
         required: false
         type: string
         default: ""
+    secrets:
+      tag_token:
+        description: "Token with Contents and Workflows write for the tag push; without it GITHUB_TOKEN is used, which GitHub refuses for tags whose commits hold workflow files"
+        required: false
 
 permissions:
   contents: write
@@ -146,19 +150,56 @@ jobs:
         shell: bash
         env:
           TAG_PREFIX: ${{ inputs.tag_prefix }}
+          TAG_TOKEN: ${{ secrets.tag_token }}
         run: |
           set -euo pipefail
+          export LC_ALL=C
           if ! git check-ref-format "refs/tags/${TAG_PREFIX}x"; then
             echo "::error::tag_prefix '$TAG_PREFIX' does not make a valid tag name."
             exit 1
           fi
+          under_prefix() { awk -v p="refs/tags/${TAG_PREFIX}" 'index($0, p) == 1' | sort; }
 
+          existing=$(git ls-remote --tags origin | awk '!/\^\{\}$/ { print $2 }' | under_prefix)
           # No '+' in either refspec: a tag that moved upstream fails the run instead of being overwritten.
           if ! git fetch --no-tags "$SOURCE_REMOTE" "refs/tags/*:refs/tags/${TAG_PREFIX}*"; then
             echo "::error::A source tag no longer matches the tag under '${TAG_PREFIX}' here. Review it, then delete the old tag to accept the new one."
             exit 1
           fi
-          git push origin "refs/tags/${TAG_PREFIX}*:refs/tags/${TAG_PREFIX}*"
+          new=$(comm -13 <(echo "$existing") <(git for-each-ref --format='%(refname)' refs/tags | under_prefix))
+
+          # A tag push by a token other than GITHUB_TOKEN starts workflows from the tagged commit, which holds the
+          # source repo's workflows. Skip any tag whose workflows may start on push or create.
+          refspecs=()
+          for ref in $new; do
+            commit=$(git rev-parse "$ref^{commit}")
+            trigger=""
+            for f in $(git ls-tree --name-only "$commit" .github/workflows/ | grep -E '\.ya?ml$' || true); do
+              # Read the file first: with pipefail, grep -q ending early can fail the pipe and hide a match.
+              workflow=$(git show "$commit:$f")
+              if grep -qE '^[[:space:]]*["'"'"']?(on|true)["'"'"']?[[:space:]]*:.*\b(push|create)\b|^[[:space:]]*["'"'"']?(push|create)["'"'"']?[[:space:]]*:|^[[:space:]]*-[[:space:]]*["'"'"']?(push|create)["'"'"']?[[:space:]]*(#.*)?$' <<<"$workflow"; then
+                trigger=$f; break
+              fi
+            done
+            if [ -n "$trigger" ]; then
+              echo "::warning::Skipped ${ref#refs/tags/}: $trigger may start on push or create."
+            else
+              refspecs+=("$ref:$ref")
+            fi
+          done
+          if [ ${#refspecs[@]} -eq 0 ]; then
+            echo "No new tags to push."
+            exit 0
+          fi
+
+          echo "Pushing ${#refspecs[@]} new tag(s)."
+          if [ -n "$TAG_TOKEN" ]; then
+            # The empty extraheader drops checkout's GITHUB_TOKEN header so the token in the URL is used.
+            git -c "http.https://github.com/.extraheader=" push \
+              "https://x-access-token:${TAG_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${refspecs[@]}"
+          else
+            git push origin "${refspecs[@]}"
+          fi
 
       - name: Create or update PR
         if: ${{ inputs.create_pr }}
